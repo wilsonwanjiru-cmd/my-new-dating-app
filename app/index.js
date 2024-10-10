@@ -5,10 +5,10 @@ import { Redirect, Stack } from 'expo-router';
 
 const Index = () => {
   return (
-    <Redirect href="/(tabs)/profile" />
+    <Redirect href="/(authenticate)/login" />
   );
 }
 
-export default Index;
+export default Index; // Ensure the export matches the component name
 
 const styles = StyleSheet.create({});

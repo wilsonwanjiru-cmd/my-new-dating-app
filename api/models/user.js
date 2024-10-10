@@ -1,35 +1,35 @@
-const mongoose =  require("mongoose");
-const { password } = require("pg/lib/defaults");
+const mongoose = require("mongoose");
+
 const userSchema = new mongoose.Schema({
     name: {
         type: String,
         required: true,
     },
-    email:{
+    email: {
         type: String,
         required: true,
         unique: true,
     },
-    password:{
+    password: {
         type: String,
-        required:true,
+        required: true,
     },
-    gender:{
-        type:String,
-        enum:["male","female","other"],
+    gender: {
+        type: String,
+        enum: ["male", "female", "other"],
     },
-    verified:{
-        type:Boolean,
-        default:false,
+    verified: {
+        type: Boolean,
+        default: false,
     },
-    verification:String,
+    verification: String,
     crushes: [
         {
-            type:mongoose.Schema.Types.ObjectId,
-        ref:"User",
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
         },
     ],
-    profileImages:[
+    profileImages: [
         {
             type: String,
         },
@@ -37,16 +37,17 @@ const userSchema = new mongoose.Schema({
     description: {
         type: String,
     },
-    turnOns:[
+    turnOns: [
         {
             type: String,
         },
     ],
-    lookingFor:[
+    lookingFor: [
         {
             type: String,
         },
     ],
-})
-const User = mongoose.model("User",userSchema);
-modelNames.exports = User
+});
+
+const User = mongoose.model("User", userSchema);
+module.exports = User;
