@@ -1,42 +1,57 @@
-import { StyleSheet, Text, View, Pressable, Image } from "react-native";
+import { StyleSheet, Text, View, Pressable, Image, Alert } from "react-native";
 import React, { useState, useEffect } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import "core-js/stable/atob";
-import {jwtDecode} from "jwt-decode";
-import axios from "axios"
-import { useRouter } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage"; // For storing and retrieving data locally
+import "core-js/stable/atob"; // Polyfill for atob (used by jwt-decode)
+import { jwtDecode } from "jwt-decode"; // For decoding JWT tokens
+import axios from "axios"; // For making HTTP requests
+import { useRouter } from "expo-router"; // For navigation
 
-const select = () => {
+const Select = () => {
   const router = useRouter();
-  const [option, setOption] = useState("");
-  const [userId,setUserId] = useState("");
+  const [option, setOption] = useState(""); // State to store the selected gender option
+  const [userId, setUserId] = useState(""); // State to store the user ID
+
+  // Fetch the user ID from the JWT token stored in AsyncStorage
   useEffect(() => {
-    const fetchUser = async() => {
-        const token = await AsyncStorage.getItem("auth");
-        const decodedToken = jwtDecode(token);
-        const userId = decodedToken.userId;
-        setUserId(userId)
-    }
+    const fetchUser = async () => {
+      try {
+        const token = await AsyncStorage.getItem("auth"); // Retrieve the token
+        if (token) {
+          const decodedToken = jwtDecode(token); // Decode the token
+          const userId = decodedToken.userId; // Extract the user ID
+          setUserId(userId); // Set the user ID in state
+        }
+      } catch (error) {
+        console.log("Error decoding token or fetching user ID:", error);
+      }
+    };
 
     fetchUser();
-  },[])
+  }, []);
+
+  // Update the user's gender
   const updateUserGender = async () => {
-    try{
-        const response = await axios.put(`http://192.168.43.73:3000/users/${userId}/gender`,{
-            gender:option
-        });
+    try {
+      const response = await axios.put(
+        `http://localhost:5000/api/users/${userId}/gender`,
+        { gender: option }
+      );
 
-        console.log(response.data);
+      console.log("Update gender response:", response.data);
 
-        if(response.status == 200){
-            router.replace("(tabs)/bio")
-        }
-    } catch(error){
-        console.log("error",error)
+      if (response.status === 200) {
+        Alert.alert("Success", "Gender updated successfully!");
+        router.replace("(tabs)/bio"); // Navigate to the bio screen
+      }
+    } catch (error) {
+      console.log("Error updating gender:", error);
+      Alert.alert("Error", "Failed to update gender.");
     }
-  }
+  };
+
   return (
     <View style={{ flex: 1, backgroundColor: "white", padding: 12 }}>
+      {/* Male Option */}
       <Pressable
         onPress={() => setOption("male")}
         style={{
@@ -47,8 +62,8 @@ const select = () => {
           alignItems: "center",
           marginTop: 25,
           borderRadius: 5,
-          borderColor: option == "male" ? "#D0D0D0" : "transparent",
-          borderWidth: option == "male" ? 1 : 0,
+          borderColor: option === "male" ? "#D0D0D0" : "transparent",
+          borderWidth: option === "male" ? 1 : 0,
         }}
       >
         <Text style={{ fontSize: 16, fontWeight: "500" }}>I am a Man</Text>
@@ -60,6 +75,7 @@ const select = () => {
         />
       </Pressable>
 
+      {/* Female Option */}
       <Pressable
         onPress={() => setOption("female")}
         style={{
@@ -70,8 +86,8 @@ const select = () => {
           alignItems: "center",
           marginTop: 25,
           borderRadius: 5,
-          borderColor: option == "female" ? "#D0D0D0" : "transparent",
-          borderWidth: option == "female" ? 1 : 0,
+          borderColor: option === "female" ? "#D0D0D0" : "transparent",
+          borderWidth: option === "female" ? 1 : 0,
         }}
       >
         <Text style={{ fontSize: 16, fontWeight: "500" }}>I am a Woman</Text>
@@ -83,6 +99,7 @@ const select = () => {
         />
       </Pressable>
 
+      {/* Non-Binary Option */}
       <Pressable
         onPress={() => setOption("nonbinary")}
         style={{
@@ -93,8 +110,8 @@ const select = () => {
           alignItems: "center",
           marginTop: 25,
           borderRadius: 5,
-          borderColor: option == "nonbinary" ? "#D0D0D0" : "transparent",
-          borderWidth: option == "nonbinary" ? 1 : 0,
+          borderColor: option === "nonbinary" ? "#D0D0D0" : "transparent",
+          borderWidth: option === "nonbinary" ? 1 : 0,
         }}
       >
         <Text style={{ fontSize: 16, fontWeight: "500" }}>I am Non-Binary</Text>
@@ -106,9 +123,10 @@ const select = () => {
         />
       </Pressable>
 
+      {/* Done Button */}
       {option && (
         <Pressable
-        onPress={updateUserGender}
+          onPress={updateUserGender}
           style={{
             marginTop: 25,
             backgroundColor: "black",
@@ -127,6 +145,6 @@ const select = () => {
   );
 };
 
-export default select;
+export default Select;
 
 const styles = StyleSheet.create({});

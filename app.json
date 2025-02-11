@@ -4,7 +4,6 @@
     "slug": "ruda-dating-site",
     "description": "Welcome to Ruda Dating Site",
     "version": "1.0.0",
-    "entryPoint": "./src/App.js",
     "orientation": "portrait",
     "icon": "./assets/images/logo2.png",
     "scheme": "my-new-dating-app",
@@ -31,7 +30,8 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
-      "expo-router"
+      "expo-router",
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true
@@ -49,6 +49,7 @@
     },
     "updates": {
       "url": "https://u.expo.dev/d94d5592-f4fb-4716-a764-231324727033"
-    }
+    },
+    "newArchEnabled": true
   }
 }

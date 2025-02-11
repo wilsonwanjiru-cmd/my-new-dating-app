@@ -1,40 +1,67 @@
 // app/(tabs)/profile/index.js
 import { FlatList, StyleSheet, Text, View } from "react-native";
 import React, { useState, useEffect } from "react";
-import "core-js/stable/atob";
-import { jwtDecode } from "jwt-decode";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import axios from "axios";
-import Profile from "../../../components/Profile";
+import "core-js/stable/atob"; // Polyfill for atob (used by jwt-decode)
+import { jwtDecode } from "jwt-decode"; // For decoding JWT tokens
+import AsyncStorage from "@react-native-async-storage/async-storage"; // For storing and retrieving data locally
+import axios from "axios"; // For making HTTP requests
+import Profile from "../../../components/Profile"; // Custom Profile component
 
-const index = () => {
-  const [userId, setUserId] = useState("");
-  const [user, setUser] = useState();
-  const [profiles, setProfiles] = useState([]);
+const Index = () => {
+  const [userId, setUserId] = useState(""); // State to store the user ID
+  const [user, setUser] = useState(null); // State to store the user details
+  const [profiles, setProfiles] = useState([]); // State to store the list of profiles
+
+  // Fetch the user ID from the JWT token stored in AsyncStorage
   useEffect(() => {
     const fetchUser = async () => {
-      const token = await AsyncStorage.getItem("auth");
-      const decodedToken = jwtDecode(token);
-      const userId = decodedToken.userId;
-      setUserId(userId);
+      try {
+        const token = await AsyncStorage.getItem("auth"); // Retrieve the token
+        if (token) {
+          const decodedToken = jwtDecode(token); // Decode the token
+          const userId = decodedToken.userId; // Extract the user ID
+          setUserId(userId); // Set the user ID in state
+        }
+      } catch (error) {
+        console.log("Error decoding token or fetching user ID:", error);
+      }
     };
 
     fetchUser();
   }, []);
+
+  // Fetch the user's details using the user ID
   const fetchUserDescription = async () => {
     try {
-      const response = await axios.get(`http://192.168.43.73:3000/users/${userId}`);
-      console.log(response);
-      const user = response.data;
-      setUser(user?.user);
+      const response = await axios.get(`http://localhost:5000/api/users/${userId}/description`);
+      console.log("User details response:", response);
+      const user = response.data.user; // Extract user details from the response
+      setUser(user); // Set the user details in state
     } catch (error) {
-      console.log("Error fetching user description", error);
+      console.log("Error fetching user description:", error);
     }
   };
 
+  // Update the user's description
+  const updateUserDescription = async (description) => {
+    try {
+      const response = await axios.post(
+        `http://localhost:5000/api/users/${userId}/description`,
+        { description }
+      );
+      console.log("Update description response:", response);
+      if (response.status === 200) {
+        setUser(response.data.user); // Update the user details in state
+      }
+    } catch (error) {
+      console.log("Error updating user description:", error);
+    }
+  };
+
+  // Fetch profiles based on the user's preferences
   const fetchProfiles = async () => {
     try {
-      const response = await axios.get("http://192.168.43.73:3000/profiles", {
+      const response = await axios.get("http://localhost:5000/api/profiles", {
         params: {
           userId: userId,
           gender: user?.gender,
@@ -43,34 +70,40 @@ const index = () => {
         },
       });
 
-      setProfiles(response.data.profiles);
+      setProfiles(response.data.profiles); // Set the profiles in state
     } catch (error) {
-      console.log("error", error);
+      console.log("Error fetching profiles:", error);
     }
   };
+
+  // Fetch user details when the user ID changes
   useEffect(() => {
     if (userId) {
       fetchUserDescription();
     }
   }, [userId]);
+
+  // Fetch profiles when the user ID or user details change
   useEffect(() => {
     if (userId && user) {
       fetchProfiles();
     }
   }, [userId, user]);
-  console.log("profiles", profiles);
+
+  console.log("Profiles:", profiles);
+
   return (
     <View style={{ flex: 1 }}>
       <FlatList
         data={profiles}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item) => item.id} // Ensure each item has a unique key
         renderItem={({ item, index }) => (
           <Profile
             key={index}
             item={item}
             userId={userId}
             setProfiles={setProfiles}
-            isEven={index % 2 === 0}
+            isEven={index % 2 === 0} // Alternate styling for even/odd items
           />
         )}
       />
@@ -78,6 +111,6 @@ const index = () => {
   );
 };
 
-export default index;
+export default Index;
 
 const styles = StyleSheet.create({});

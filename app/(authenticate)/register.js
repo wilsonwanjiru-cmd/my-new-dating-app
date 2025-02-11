@@ -14,49 +14,59 @@ import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { AntDesign } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import axios from "axios";
-import * as Font from "expo-font";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
-const register = () => {
+const Register = () => {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const router = useRouter();
-  const handleRegister = () => {
+
+  const handleRegister = async () => {
     const user = {
       name: name,
       email: email,
       password: password,
     };
 
-    // send a POST  request to the backend API to register the user
-    axios
-      .post("http://192.168.43.73:3000/register", user)
-      .then((response) => {
-        console.log(response);
-        Alert.alert(
-          "Registration successful",
-          "You have been registered Successfully"
-          [
-            {
-              text:"Cancel",
-              onPress: () => console.log("Cancel Pressed"),
-              style:"cancel",
+    try {
+      // Send a POST request to the backend API to register the user
+      const response = await axios.post(
+        "http://localhost:5000/api/auth/register",
+        user
+      );
+      console.log(response.data); // Log the response for debugging
+
+      // Show success alert
+      Alert.alert(
+        "Registration Successful",
+        "You have been registered successfully.",
+        [
+          {
+            text: "OK",
+            onPress: () => {
+              // Clear the form fields
+              setName("");
+              setEmail("");
+              setPassword("");
+
+              // Navigate to the login screen
+              router.replace("/login");
             },
-            {text:"OK", onPress: () => console.log("OK Pressed")}
-          ]
-        );
-        setName("");
-        setEmail("");
-        setPassword("");
-      })
-      .catch((error) => {
-        Alert.alert(
-          "Registration Error",
-          "An error occurred while registering"
-        );
-        console.log("registration failed", error);
-      });
+          },
+        ]
+      );
+    } catch (error) {
+      console.error("Registration error:", error.response ? error.response.data : error.message);
+
+      // Show error alert
+      Alert.alert(
+        "Registration Error",
+        "An error occurred while registering. Please try again."
+      );
+    }
   };
+
   return (
     <SafeAreaView
       style={{ flex: 1, backgroundColor: "white", alignItems: "center" }}
@@ -253,6 +263,6 @@ const register = () => {
   );
 };
 
-export default register;
+export default Register;
 
 const styles = StyleSheet.create({});

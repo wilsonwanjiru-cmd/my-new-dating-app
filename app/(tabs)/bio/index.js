@@ -19,29 +19,20 @@ import "core-js/stable/atob";
 import { jwtDecode } from "jwt-decode";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-const index = () => {
+const BioScreen = () => {
   const [option, setOption] = useState("AD");
   const [description, setDescription] = useState("");
-  const [activeSlide, setActiveSlide] = React.useState(0);
+  const [activeSlide, setActiveSlide] = useState(0);
   const [userId, setUserId] = useState("");
   const [selectedTurnOns, setSelectedTurnOns] = useState([]);
   const [lookingOptions, setLookingOptions] = useState([]);
   const [imageUrl, setImageUrl] = useState("");
-  const [images, setImages] = useState([]);
-  const profileImages = [
-    {
-      image:
-        "https://images.pexels.com/photos/1042140/pexels-photo-1042140.jpeg?auto=compress&cs=tinysrgb&w=800",
-    },
-    {
-      image:
-        "https://images.pexels.com/photos/1215695/pexels-photo-1215695.jpeg?auto=compress&cs=tinysrgb&w=800",
-    },
-    {
-      image:
-        "https://images.pexels.com/photos/7580971/pexels-photo-7580971.jpeg?auto=compress&cs=tinysrgb&w=800",
-    },
-  ];
+  const [images, setImages] = useState([
+    "https://images.pexels.com/photos/1042140/pexels-photo-1042140.jpeg?auto=compress&cs=tinysrgb&w=800",
+    "https://images.pexels.com/photos/1215695/pexels-photo-1215695.jpeg?auto=compress&cs=tinysrgb&w=800",
+    "https://images.pexels.com/photos/7580971/pexels-photo-7580971.jpeg?auto=compress&cs=tinysrgb&w=800",
+  ]);
+
   const turnons = [
     {
       id: "0",
@@ -52,7 +43,7 @@ const index = () => {
       id: "10",
       name: "Kissing",
       description:
-        " It's a feeling of closeness, where every touch of lips creates a symphony of emotions.",
+        "It's a feeling of closeness, where every touch of lips creates a symphony of emotions.",
     },
     {
       id: "1",
@@ -64,14 +55,15 @@ const index = () => {
       id: "2",
       name: "Nibbling",
       description:
-        "playful form of biting or taking small, gentle bites, typically done with the teeth",
+        "Playful form of biting or taking small, gentle bites, typically done with the teeth",
     },
     {
       id: "3",
       name: "Desire",
-      description: "powerful emotion or attainment of a particular person.",
+      description: "Powerful emotion or attainment of a particular person.",
     },
   ];
+
   const data = [
     {
       id: "0",
@@ -94,53 +86,61 @@ const index = () => {
       description: "Let's Vibe and see where it goes",
     },
   ];
+
   useEffect(() => {
     const fetchUser = async () => {
-      const token = await AsyncStorage.getItem("auth");
-      const decodedToken = jwtDecode(token);
-      const userId = decodedToken.userId;
-      setUserId(userId);
+      try {
+        const token = await AsyncStorage.getItem("auth");
+        const decodedToken = jwtDecode(token);
+        const userId = decodedToken.userId;
+        setUserId(userId);
+      } catch (error) {
+        console.log("Error fetching user ID", error);
+      }
     };
 
     fetchUser();
   }, []);
+
   const fetchUserDescription = async () => {
     try {
-      const response = await axios.get(`http://192.168.43.73:3000/users/${userId}`);
-      console.log(response);
+      const response = await axios.get(`http://localhost:5000/api/users/${userId}`);
       const user = response.data;
 
-      setDescription(user?.user?.description);
-      setSelectedTurnOns(user.user?.turnOns);
-      setImages(user?.user.profileImages);
-      setLookingOptions(user?.user.lookingFor)
+      setDescription(user?.description || "");
+      setSelectedTurnOns(user?.turnOns || []);
+      setImages(user?.profileImages || []);
+      setLookingOptions(user?.lookingFor || []);
     } catch (error) {
       console.log("Error fetching user description", error);
     }
   };
+
   useEffect(() => {
     if (userId) {
       fetchUserDescription();
     }
   }, [userId]);
+
   const updateUserDescription = async () => {
     try {
       const response = await axios.put(
-        `http://192.168.43.73:3000/users/${userId}/description`,
+        `http://localhost:5000/api/users/${userId}/description`,
         {
           description: description,
         }
       );
 
-      console.log(response.data);
-
       if (response.status === 200) {
         Alert.alert("Success", "Description updated successfully");
+        fetchUserDescription(); // Refresh the user data
       }
     } catch (error) {
-      console.log("Error updating the user Description");
+      console.log("Error updating the user description", error);
+      Alert.alert("Error", "Failed to update description");
     }
   };
+
   const handleToggleTurnOn = (turnOn) => {
     if (selectedTurnOns.includes(turnOn)) {
       removeTurnOn(turnOn);
@@ -148,6 +148,7 @@ const index = () => {
       addTurnOn(turnOn);
     }
   };
+
   const handleOption = (lookingFor) => {
     if (lookingOptions.includes(lookingFor)) {
       removeLookingFor(lookingFor);
@@ -155,120 +156,125 @@ const index = () => {
       addLookingFor(lookingFor);
     }
   };
+
   const addLookingFor = async (lookingFor) => {
     try {
       const response = await axios.put(
-        `http://192.168.43.73:3000/users/${userId}/looking-for`,
+        `http://localhost:5000/api/users/${userId}/looking-for`,
         {
           lookingFor: lookingFor,
         }
       );
 
-      console.log(response.data);
-
-      if (response.status == 200) {
+      if (response.status === 200) {
         setLookingOptions([...lookingOptions, lookingFor]);
       }
     } catch (error) {
-      console.log("Error addding looking for", error);
+      console.log("Error adding looking for", error);
     }
   };
+
   const removeLookingFor = async (lookingFor) => {
     try {
       const response = await axios.put(
-        `http://192.168.43.73:3000/users/${userId}/looking-for/remove`,
+        `http://localhost:5000/api/users/${userId}/looking-for/remove`,
         {
           lookingFor: lookingFor,
         }
       );
 
-      console.log(response.data); // Log the response for confirmation
-
-      // Handle success or update your app state accordingly
       if (response.status === 200) {
         setLookingOptions(lookingOptions.filter((item) => item !== lookingFor));
       }
     } catch (error) {
-      console.error("Error removing looking for:", error);
-      // Handle error scenarios
+      console.log("Error removing looking for", error);
     }
   };
 
   const addTurnOn = async (turnOn) => {
     try {
       const response = await axios.put(
-        `http://192.168.43.73:3000/users/${userId}/turn-ons/add`,
+        `http://localhost:5000/api/users/${userId}/turn-ons/add`,
         {
           turnOn: turnOn,
         }
       );
 
-      console.log(response.data);
-
-      if (response.status == 200) {
+      if (response.status === 200) {
         setSelectedTurnOns([...selectedTurnOns, turnOn]);
       }
     } catch (error) {
       console.log("Error adding turn on", error);
     }
   };
+
   const removeTurnOn = async (turnOn) => {
     try {
       const response = await axios.put(
-        `http://192.168.43.73:3000/users/${userId}/turn-ons/remove`,
+        `http://localhost:5000/api/users/${userId}/turn-ons/remove`,
         {
           turnOn: turnOn,
         }
       );
 
-      console.log(response.data);
-
-      if (response.status == 200) {
+      if (response.status === 200) {
         setSelectedTurnOns(selectedTurnOns.filter((item) => item !== turnOn));
       }
     } catch (error) {
-      console.log("error removing turn on", error);
+      console.log("Error removing turn on", error);
     }
   };
-  const renderImageCarousel = ({ item }) => (
-    <View
-      style={{ width: "100%", justifyContent: "center", alignItems: "center" }}
-    >
-      <Image
-        style={{
-          width: "85%",
-          resizeMode: "cover",
-          height: 290,
-          borderRadius: 10,
-          transform: [{ rotate: "-5deg" }],
-        }}
-        source={{ uri: item }}
-      />
-      <Text
-        style={{ position: "absolute", top: 10, right: 10, color: "black" }}
+
+  const renderImageCarousel = ({ item }) => {
+    if (!item) return null; // Handle undefined items
+
+    return (
+      <View
+        style={{ width: "100%", justifyContent: "center", alignItems: "center" }}
       >
-        {activeSlide + 1}/{images.length}
-      </Text>
-    </View>
-  );
-  const handleAddImage = async () =>{
-      try{
-        const response = await axios.post(`http://192.168.43.73:3000/users/${userId}/profile-images`,{
-            imageUrl:imageUrl
-        });
+        <Image
+          style={{
+            width: "85%",
+            resizeMode: "cover",
+            height: 290,
+            borderRadius: 10,
+            transform: [{ rotate: "-5deg" }],
+          }}
+          source={{ uri: item }}
+        />
+        <Text
+          style={{ position: "absolute", top: 10, right: 10, color: "black" }}
+        >
+          {activeSlide + 1}/{images.length}
+        </Text>
+      </View>
+    );
+  };
 
-        console.log(response);
+  const handleAddImage = async () => {
+    try {
+      const response = await axios.post(
+        `http://localhost:5000/api/users/${userId}/profile-images`,
+        {
+          imageUrl: imageUrl,
+        }
+      );
 
-        setImageUrl("");
-      } catch(error){
-          console.log("error",error)
-      }
-  }
+      setImageUrl("");
+      fetchUserDescription(); // Refresh images after adding a new one
+    } catch (error) {
+      console.log("Error adding image", error);
+    }
+  };
+
   const getRandomImage = () => {
-      const randomIndex = Math.floor(Math.random() * images.length);
-      return images[randomIndex]
-  }
-  const randomImage = getRandomImage()
+    if (images.length === 0) return ""; // Handle empty images array
+    const randomIndex = Math.floor(Math.random() * images.length);
+    return images[randomIndex];
+  };
+
+  const randomImage = getRandomImage();
+
   return (
     <ScrollView>
       <View>
@@ -304,7 +310,7 @@ const index = () => {
                   resizeMode: "cover",
                 }}
                 source={{
-                    uri: randomImage,
+                  uri: randomImage,
                 }}
               />
               <Text style={{ fontSize: 16, fontWeight: "600", marginTop: 6 }}>
@@ -333,7 +339,7 @@ const index = () => {
             style={{
               fontSize: 16,
               fontWeight: "500",
-              color: option == "AD" ? "black" : "gray",
+              color: option === "AD" ? "black" : "gray",
             }}
           >
             AD
@@ -344,7 +350,7 @@ const index = () => {
             style={{
               fontSize: 16,
               fontWeight: "500",
-              color: option == "Photos" ? "black" : "gray",
+              color: option === "Photos" ? "black" : "gray",
             }}
           >
             Photos
@@ -355,7 +361,7 @@ const index = () => {
             style={{
               fontSize: 16,
               fontWeight: "500",
-              color: option == "Turn-ons" ? "black" : "gray",
+              color: option === "Turn-ons" ? "black" : "gray",
             }}
           >
             Turn-ons
@@ -366,7 +372,7 @@ const index = () => {
             style={{
               fontSize: 16,
               fontWeight: "500",
-              color: option == "Looking For" ? "black" : "gray",
+              color: option === "Looking For" ? "black" : "gray",
             }}
           >
             Looking For
@@ -375,7 +381,7 @@ const index = () => {
       </View>
 
       <View style={{ marginHorizontal: 14, marginVertical: 15 }}>
-        {option == "AD" && (
+        {option === "AD" && (
           <View
             style={{
               borderColor: "#202020",
@@ -394,7 +400,6 @@ const index = () => {
                 fontSize: description ? 17 : 17,
               }}
               placeholder="Write your AD for people to like you"
-              //   placeholderTextColor={"black"}
             />
             <Pressable
               onPress={updateUserDescription}
@@ -426,7 +431,7 @@ const index = () => {
       </View>
 
       <View style={{ marginHorizontal: 14 }}>
-        {option == "Photos" && (
+        {option === "Photos" && (
           <View>
             <Carousel
               data={images}
@@ -459,7 +464,7 @@ const index = () => {
                   value={imageUrl}
                   onChangeText={(text) => setImageUrl(text)}
                   style={{ color: "gray", marginVertical: 10, width: 300 }}
-                  placeholder="enter your image url"
+                  placeholder="Enter your image URL"
                 />
               </View>
               <Button onPress={handleAddImage} style={{ marginTop: 5 }} title="Add Image" />
@@ -469,7 +474,7 @@ const index = () => {
       </View>
 
       <View style={{ marginHorizontal: 14 }}>
-        {option == "Turn-ons" && (
+        {option === "Turn-ons" && (
           <View>
             {turnons?.map((item, index) => (
               <Pressable
@@ -495,7 +500,7 @@ const index = () => {
                       fontWeight: "bold",
                       flex: 1,
                     }}
-                  >
+                    >
                     {item?.name}
                   </Text>
                   {selectedTurnOns.includes(item?.name) && (
@@ -519,7 +524,7 @@ const index = () => {
       </View>
 
       <View style={{ marginHorizontal: 14 }}>
-        {option == "Looking For" && (
+        {option === "Looking For" && (
           <>
             <View>
               <FlatList
@@ -541,7 +546,7 @@ const index = () => {
                       borderRadius: 5,
                       borderColor: "#fd5c63",
                       borderWidth: lookingOptions.includes(item?.name)
-                        ? "transparent"
+                        ? 0
                         : 0.7,
                     }}
                   >
@@ -581,6 +586,6 @@ const index = () => {
   );
 };
 
-export default index;
+export default BioScreen;
 
 const styles = StyleSheet.create({});

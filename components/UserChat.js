@@ -1,40 +1,46 @@
 import { StyleSheet, Text, View, Pressable, Image } from "react-native";
-import React ,{useEffect,useState} from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter } from "expo-router";
-import axios from "axios"
+import axios from "axios";
 
 const UserChat = ({ item, userId }) => {
-    const router = useRouter();
-    const [messages,setMessages] = useState([]);
-    const getLastMessage = () => {
-        const n = messages.length;
+  const router = useRouter();
+  const [messages, setMessages] = useState([]);
 
+  // Get the last message from the messages array
+  const getLastMessage = () => {
+    const n = messages.length;
+    return messages[n - 1];
+  };
 
-        return messages[n-1];
+  const lastMessage = getLastMessage();
+
+  // Fetch messages when the component mounts
+  useEffect(() => {
+    fetchMessages();
+  }, []);
+
+  // Fetch messages between the current user and the selected user
+  const fetchMessages = async () => {
+    try {
+      const senderId = userId;
+      const receiverId = item?._id;
+
+      // Fetch messages from the backend
+      const response = await axios.get("http://localhost:5000/api/messages", {
+        params: { senderId, receiverId },
+      });
+
+      // Update the messages state with the fetched messages
+      setMessages(response.data);
+    } catch (error) {
+      console.error("Error fetching messages:", error);
     }
-    const lastMessage = getLastMessage();
-    useEffect(() => {
-        fetchMessages();
-      }, []);
-    
-      const fetchMessages = async () => {
-        try {
-          const senderId = userId;
-          const receiverId = item?._id;
-          const response = await axios.get("http://192.168.43.73:3000/messages", {
-            params: { senderId, receiverId },
-          });
-    
-          // Assuming messages are stored in state to display in the UI
-          setMessages(response.data);
-        } catch (error) {
-          console.error("Error fetching messages:", error);
-          // Handle error scenarios
-        }
-      };
+  };
+
   return (
     <Pressable
-    onPress={() =>
+      onPress={() =>
         router.push({
           pathname: "/chat/chatroom",
           params: {

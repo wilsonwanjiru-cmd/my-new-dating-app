@@ -1,6 +1,6 @@
 // app/(tabs)/chat/index.js
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import React, { useState, useEffect,useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import { Feather } from "@expo/vector-icons";
 import { MaterialIcons } from "@expo/vector-icons";
@@ -12,67 +12,79 @@ import { useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import UserChat from "../../../components/UserChat";
 
-const index = () => {
+const ChatScreen = () => {
   const router = useRouter();
   const [userId, setUserId] = useState("");
   const [profiles, setProfiles] = useState([]);
   const [matches, setMatches] = useState([]);
+
+  // Fetch the user ID from AsyncStorage
   useEffect(() => {
     const fetchUser = async () => {
-      const token = await AsyncStorage.getItem("auth");
-      const decodedToken = jwtDecode(token);
-      const userId = decodedToken.userId;
-      setUserId(userId);
+      try {
+        const token = await AsyncStorage.getItem("auth");
+        const decodedToken = jwtDecode(token);
+        const userId = decodedToken.userId;
+        setUserId(userId);
+      } catch (error) {
+        console.log("Error fetching user ID", error);
+      }
     };
 
     fetchUser();
   }, []);
+
+  // Fetch received likes details
   const fetchReceivedLikesDetails = async () => {
     try {
       const response = await axios.get(
         `http://192.168.43.73:3000/received-likes/${userId}/details`
       );
-
-      console.log(response);
-
       const receivedLikesDetails = response.data.receivedLikesDetails;
-
       setProfiles(receivedLikesDetails);
     } catch (error) {
-      console.log("error fetching the details", error);
+      console.log("Error fetching received likes details", error);
     }
   };
+
+  // Fetch user matches
   const fetchUserMatches = async () => {
     try {
       const response = await axios.get(
         `http://192.168.43.47:3000/users/${userId}/matches`
       );
-
       const userMatches = response.data.matches;
-
       setMatches(userMatches);
     } catch (error) {
-      console.log("Error", error);
+      console.log("Error fetching user matches", error);
     }
   };
+
+  // Fetch received likes details when userId changes
   useEffect(() => {
     if (userId) {
       fetchReceivedLikesDetails();
     }
   }, [userId]);
+
+  // Fetch user matches when userId changes
   useEffect(() => {
     if (userId) {
       fetchUserMatches();
     }
   }, [userId]);
+
+  // Fetch user matches when the screen is focused
   useFocusEffect(
     useCallback(() => {
       if (userId) {
         fetchUserMatches();
       }
-    }, [])
+    }, [userId]) // Add userId as a dependency
   );
-  console.log("matches",matches)
+
+  console.log("matches", matches);
+
   return (
     <View style={{ backgroundColor: "white", flex: 1, padding: 10 }}>
       <View
@@ -85,6 +97,7 @@ const index = () => {
         <Text style={{ fontSize: 20, fontWeight: "500" }}>CHATS</Text>
         <Ionicons name="chatbox-ellipses-outline" size={25} color="black" />
       </View>
+
       <Pressable
         onPress={() =>
           router.push({
@@ -120,14 +133,14 @@ const index = () => {
       </Pressable>
 
       <View>
-          {matches?.map((item,index) => (
-              <UserChat key={index} userId={userId} item={item}/>
-          ))}
+        {matches?.map((item, index) => (
+          <UserChat key={index} userId={userId} item={item} />
+        ))}
       </View>
     </View>
   );
 };
 
-export default index;
+export default ChatScreen;
 
 const styles = StyleSheet.create({});

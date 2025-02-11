@@ -15,7 +15,6 @@ import { useRouter } from "expo-router";
 import axios from "axios";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-
 const Login = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -35,17 +34,24 @@ const Login = () => {
     checkLoginStatus();
   }, []);
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
     const user = {
       email: email,
       password: password,
     };
-    axios.post("http://192.168.43.73:3000/login", user).then((response) => {
-      console.log(response);
-      const token = response.data.token;
-      AsyncStorage.setItem("auth", token);
-      router.replace("/(authenticate)/select");
-    });
+
+    try {
+      const response = await axios.post("http://localhost:5000/api/auth/login", user);
+      console.log(response.data); // Log the response for debugging
+
+      const token = response.data.token; // Extract the token from the response
+      await AsyncStorage.setItem("auth", token); // Save the token to AsyncStorage
+
+      router.replace("/(authenticate)/select"); // Navigate to the next screen
+    } catch (error) {
+      console.error("Login error:", error.response ? error.response.data : error.message);
+      alert("Login failed. Please check your credentials and try again.");
+    }
   };
 
   return (
