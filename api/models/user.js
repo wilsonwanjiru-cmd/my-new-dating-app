@@ -43,6 +43,12 @@ const userSchema = new mongoose.Schema(
         ref: "User", // Reference to other User documents
       },
     ],
+    receivedLikes: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User", // Reference to other User documents
+      },
+    ],
     profileImages: [
       {
         type: String,

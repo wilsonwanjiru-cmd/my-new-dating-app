@@ -38,7 +38,7 @@ const ChatScreen = () => {
   const fetchReceivedLikesDetails = async () => {
     try {
       const response = await axios.get(
-        `http://192.168.43.73:3000/received-likes/${userId}/details`
+        `http://localhost:5000/api/received-likes/${userId}/details`
       );
       const receivedLikesDetails = response.data.receivedLikesDetails;
       setProfiles(receivedLikesDetails);
@@ -51,7 +51,7 @@ const ChatScreen = () => {
   const fetchUserMatches = async () => {
     try {
       const response = await axios.get(
-        `http://192.168.43.47:3000/users/${userId}/matches`
+        `http://localhost:5000/api/users/${userId}/matches`
       );
       const userMatches = response.data.matches;
       setMatches(userMatches);

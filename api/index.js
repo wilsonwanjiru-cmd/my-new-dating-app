@@ -59,9 +59,10 @@ app.use("/api/chat", chatRoutes); // Chat routes
 app.use("/api/email", emailRoutes); // Email verification routes
 app.use("/api/match", matchRoutes); // Match routes
 app.use("/api/message", messageRoutes); // Message routes
-app.use("/api/users", userRoutes); // User routes
+app.use("/api/user", userRoutes); // User routes
 app.use("/api/payments", paymentRoutes); // Payment routes
 app.use("/api/photos", photoRoutes); // Photo routes
+app.use("/api/users", userRoutes);
 
 // Default route
 app.get("/", (req, res) => {

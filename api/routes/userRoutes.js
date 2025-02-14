@@ -14,6 +14,7 @@ const {
   removeTurnOn,
   addLookingFor,
   removeLookingFor,
+  getReceivedLikesDetails, // Add this function
 } = require("../controllers/userController");
 
 const matchController = require("../controllers/matchController");
@@ -61,6 +62,9 @@ router.put("/:userId/looking-for/remove", removeLookingFor);
 
 // Delete User Account
 router.delete("/:userId", deleteUserAccount);
+
+// Fetch Received Likes Details
+router.get("/received-likes/:userId/details", getReceivedLikesDetails); // Corrected route
 
 // Match Routes
 router.post("/match", matchController.createMatch); // Create a Match

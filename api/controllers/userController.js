@@ -262,6 +262,31 @@ const removeLookingFor = async (req, res) => {
   }
 };
 
+// Fetch Received Likes Details
+const getReceivedLikesDetails = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    // Find the user and populate the received likes
+    const user = await User.findById(userId).populate({
+      path: "receivedLikes",
+      select: "name profileImages description", // Select the fields you want to return
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Extract the received likes details
+    const receivedLikesDetails = user.receivedLikes;
+
+    res.status(200).json({ receivedLikesDetails });
+  } catch (error) {
+    console.error("Error fetching received likes details:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
 module.exports = {
   updateGender,
   updateDescription,
@@ -277,4 +302,5 @@ module.exports = {
   removeTurnOn,
   addLookingFor,
   removeLookingFor,
+  getReceivedLikesDetails, // Export the new function
 };
