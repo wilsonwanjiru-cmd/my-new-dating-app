@@ -1,14 +1,10 @@
 // app/index.js
-import { StyleSheet } from 'react-native';
-import React from 'react';
-import { Redirect, Stack } from 'expo-router';
+import React from "react";
+import { Redirect } from "expo-router";
 
 const Index = () => {
-  return (
-    <Redirect href="/(authenticate)/login" />
-  );
-}
+  // Redirect to the login screen when the app starts
+  return <Redirect href="/(authenticate)/login" />;
+};
 
-export default Index; // Ensure the export matches the component name
-
-const styles = StyleSheet.create({});
+export default Index;

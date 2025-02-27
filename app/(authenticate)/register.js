@@ -13,8 +13,8 @@ import React, { useState } from "react";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { AntDesign } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import axios from "axios";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import api from "../utils/service"; // Corrected import path
 
 const Register = () => {
   const [name, setName] = useState("");
@@ -30,11 +30,8 @@ const Register = () => {
     };
 
     try {
-      // Send a POST request to the backend API to register the user
-      const response = await axios.post(
-        "http://localhost:5000/api/auth/register",
-        user
-      );
+      // Use the Axios instance to make the API call
+      const response = await api.post("/api/auth/register", user);
       console.log(response.data); // Log the response for debugging
 
       // Show success alert

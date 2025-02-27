@@ -12,8 +12,8 @@ import React, { useState, useEffect } from "react";
 import { MaterialIcons } from "@expo/vector-icons";
 import { AntDesign } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import axios from "axios";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import api from "../utils/service"; // Corrected import path
 
 const Login = () => {
   const [email, setEmail] = useState("");
@@ -41,7 +41,8 @@ const Login = () => {
     };
 
     try {
-      const response = await axios.post("http://localhost:5000/api/auth/login", user);
+      // Use the Axios instance to make the API call
+      const response = await api.post("/api/auth/login", user);
       console.log(response.data); // Log the response for debugging
 
       const token = response.data.token; // Extract the token from the response

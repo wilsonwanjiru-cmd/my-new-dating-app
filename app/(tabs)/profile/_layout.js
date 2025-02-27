@@ -1,10 +1,13 @@
-// app/(tabs)/(profile)/_layout.js
-import { Stack } from 'expo-router';
+import { createStackNavigator } from "@react-navigation/stack";
+import React from "react";
+import ProfileScreen from "./index"; // Import the ProfileScreen component
 
-export default function Layout() {
+const Stack = createStackNavigator();
+
+export default function ProfileLayout() {
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="index" />
-    </Stack>
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="UserProfile" component={ProfileScreen} />
+    </Stack.Navigator>
   );
 }

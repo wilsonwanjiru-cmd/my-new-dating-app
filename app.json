@@ -5,11 +5,11 @@
     "description": "Welcome to Ruda Dating Site",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/logo2.png",
+    "icon": "./assets/images/icon.png",
     "scheme": "my-new-dating-app",
     "userInterfaceStyle": "automatic",
     "splash": {
-      "image": "./assets/images/logo1.png",
+      "image": "./assets/images/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },

@@ -13,7 +13,7 @@ import {
 } from "react-native";
 import React, { useState, useEffect } from "react";
 import { Entypo, AntDesign } from "@expo/vector-icons";
-import Carousel from "react-native-snap-carousel";
+import Carousel from "react-native-reanimated-carousel";
 import axios from "axios";
 import "core-js/stable/atob";
 import { jwtDecode } from "jwt-decode";

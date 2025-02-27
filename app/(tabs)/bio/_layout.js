@@ -1,13 +1,15 @@
-// app/(tabs)/_layout.js
-import { Stack } from 'expo-router';
+import { createStackNavigator } from "@react-navigation/stack";
+import React from "react";
+import BioScreen from "./index"; // Import the BioScreen component
 
-export default function Layout() {
+const Stack = createStackNavigator();
+
+export default function BioLayout() {
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="index" />
-    </Stack>
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="MainBio" component={BioScreen} />
+    </Stack.Navigator>
   );
 }
-
 
 

@@ -1,69 +1,65 @@
 // app/(tabs)/_layout.js
-import { Tabs } from "expo-router";
-import { Feather } from "@expo/vector-icons";
-import { Ionicons } from "@expo/vector-icons";
-import { MaterialCommunityIcons } from "@expo/vector-icons";
+import React from "react";
+import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import ProfileLayout from "./profile/_layout"; // Import ProfileLayout
+import ChatLayout from "./chat/_layout"; // Import ChatLayout
+import BioLayout from "./bio/_layout"; // Import BioLayout
 
-export default function Layout() {
+const Tab = createBottomTabNavigator();
+
+export default function TabsLayout() {
   return (
-    <Tabs>
-      <Tabs.Screen
-        name="profile"
+    <Tab.Navigator
+      screenOptions={{
+        headerShown: false, // Hide the header for all tabs
+        tabBarActiveTintColor: "black", // Color for the active tab icon and label
+        tabBarInactiveTintColor: "gray", // Color for the inactive tab icon and label
+      }}
+    >
+      {/* Profile Tab */}
+      <Tab.Screen
+        name="UserProfileTab" // Renamed to avoid conflicts
+        component={ProfileLayout} // Use ProfileLayout
         options={{
           title: "Profiles",
-          headerShown: false,
-          tabBarIcon: ({ focused }) =>
-            focused ? (
-              <Feather name="eye" size={24} color="black" />
-            ) : (
-              <Feather name="eye" size={24} color="gray" />
-            ),
+          tabBarIcon: ({ focused }) => (
+            <Feather name="eye" size={24} color={focused ? "black" : "gray"} />
+          ),
         }}
       />
 
-      <Tabs.Screen
-        name="chat"
+      {/* Chat Tab */}
+      <Tab.Screen
+        name="UserChatTab" // Renamed to avoid conflicts
+        component={ChatLayout} // Use ChatLayout
         options={{
           title: "Chat",
-          headerShown: false,
-          tabBarIcon: ({ focused }) =>
-            focused ? (
-              <Ionicons
-                name="chatbubble-ellipses-outline"
-                size={24}
-                color="black"
-              />
-            ) : (
-              <Ionicons
-                name="chatbubble-ellipses-outline"
-                size={24}
-                color="gray"
-              />
-            ),
+          tabBarIcon: ({ focused }) => (
+            <Ionicons
+              name="chatbubble-ellipses-outline"
+              size={24}
+              color={focused ? "black" : "gray"}
+            />
+          ),
         }}
       />
 
-      <Tabs.Screen
-        name="bio"
+      {/* Bio Tab */}
+      <Tab.Screen
+        name="UserBioTab" // Renamed to avoid conflicts
+        component={BioLayout} // Use BioLayout
         options={{
           title: "Account",
-          headerShown: false,
-          tabBarIcon: ({ focused }) =>
-            focused ? (
-              <MaterialCommunityIcons
-                name="guy-fawkes-mask"
-                size={24}
-                color="black"
-              />
-            ) : (
-              <MaterialCommunityIcons
-                name="guy-fawkes-mask"
-                size={24}
-                color="gray"
-              />
-            ),
+          tabBarIcon: ({ focused }) => (
+            <MaterialCommunityIcons
+              name="guy-fawkes-mask"
+              size={24}
+              color={focused ? "black" : "gray"}
+            />
+          ),
         }}
       />
-    </Tabs>
+    </Tab.Navigator>
   );
 }

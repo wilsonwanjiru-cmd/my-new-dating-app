@@ -24,15 +24,24 @@ const connectDB = require("./config/db");
 // Initialize app
 const app = express();
 const server = http.createServer(app);
+
+// Configure CORS for Express
+app.use(
+  cors({
+    origin: "http://localhost:8081", // Allow requests from your Expo app
+    credentials: true, // Allow credentials (e.g., cookies, authorization headers)
+  })
+);
+
+// Configure CORS for Socket.IO
 const io = new Server(server, {
   cors: {
-    origin: "*", // Restrict this to your frontend URL in production
-    methods: ["GET", "POST"],
+    origin: "http://localhost:8081", // Allow Socket.IO connections from your Expo app
+    methods: ["GET", "POST"], // Allowed HTTP methods
   },
 });
 
 // Middleware
-app.use(cors()); // Enable Cross-Origin Resource Sharing
 app.use(express.json()); // Parse incoming JSON requests
 
 // Log all incoming requests for debugging
@@ -62,7 +71,7 @@ app.use("/api/message", messageRoutes); // Message routes
 app.use("/api/user", userRoutes); // User routes
 app.use("/api/payments", paymentRoutes); // Payment routes
 app.use("/api/photos", photoRoutes); // Photo routes
-app.use("/api/users", userRoutes);
+app.use("/api/users", userRoutes); // User routes (duplicate, consider removing)
 
 // Default route
 app.get("/", (req, res) => {
