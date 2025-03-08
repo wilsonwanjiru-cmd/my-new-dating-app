@@ -42,7 +42,8 @@
       },
       "eas": {
         "projectId": "d94d5592-f4fb-4716-a764-231324727033"
-      }
+      },
+      "EXPO_PUBLIC_API_BASE_URL": "https://dating-apps.onrender.com"
     },
     "runtimeVersion": {
       "policy": "appVersion"
