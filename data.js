@@ -97,7 +97,7 @@ const data = [
 const profiles = [
   {
     id: "0",
-    name: "Shreya Rao",
+    name: "Wilson Mahone",
     description:
       "Hello, I want to chat and if everything goes well, meet probably during the weekend,we can go to the cinema feed the birds and hangout sometime ",
     profileImages: [
@@ -110,7 +110,7 @@ const profiles = [
   },
   {
     id: "1",
-    name: "Aditi K",
+    name: "John K",
     description:
       "Hello! I'm all for engaging conversations and if vibes align, how about a weekend meet-up? We could do something fun like catching a movie, feeding the birds at the park, and just enjoying each other's company",
     profileImages: [

@@ -12,6 +12,9 @@ import { AntDesign } from "@expo/vector-icons";
 import { FontAwesome, Entypo } from "@expo/vector-icons";
 import axios from "axios";
 
+// Use the environment variable for the backend URL
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://dating-apps.onrender.com";
+
 const Select = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
@@ -23,7 +26,7 @@ const Select = () => {
   const handleMatch = async (selectedUserId) => {
     try {
       const response = await axios.post(
-        "http://localhost:5000/api/match/create-match",
+        `${API_BASE_URL}/api/match/create-match`,
         {
           currentUserId: userId,
           selectedUserId: selectedUserId,

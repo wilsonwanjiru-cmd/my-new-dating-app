@@ -3,6 +3,9 @@ import React, { useEffect, useState } from "react";
 import { useRouter } from "expo-router";
 import axios from "axios";
 
+// Use the environment variable for the backend URL
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://dating-apps.onrender.com";
+
 const UserChat = ({ item, userId }) => {
   const router = useRouter();
   const [messages, setMessages] = useState([]);
@@ -27,7 +30,7 @@ const UserChat = ({ item, userId }) => {
       const receiverId = item?._id;
 
       // Fetch messages from the backend
-      const response = await axios.get("http://localhost:5000/api/messages", {
+      const response = await axios.get(`${API_BASE_URL}/api/messages`, {
         params: { senderId, receiverId },
       });
 

@@ -7,6 +7,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage"; // For sto
 import axios from "axios"; // For making HTTP requests
 import Profile from "../../../components/Profile"; // Custom Profile component
 
+// Use the environment variable for the backend URL
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://dating-apps.onrender.com";
+
 const Index = () => {
   const [userId, setUserId] = useState(""); // State to store the user ID
   const [user, setUser] = useState(null); // State to store the user details
@@ -33,7 +36,7 @@ const Index = () => {
   // Fetch the user's details using the user ID
   const fetchUserDescription = async () => {
     try {
-      const response = await axios.get(`http://localhost:5000/api/users/${userId}/description`);
+      const response = await axios.get(`${API_BASE_URL}/api/users/${userId}/description`);
       console.log("User details response:", response);
       const user = response.data.user; // Extract user details from the response
       setUser(user); // Set the user details in state
@@ -46,7 +49,7 @@ const Index = () => {
   const updateUserDescription = async (description) => {
     try {
       const response = await axios.post(
-        `http://localhost:5000/api/users/${userId}/description`,
+        `${API_BASE_URL}/api/users/${userId}/description`,
         { description }
       );
       console.log("Update description response:", response);
@@ -61,7 +64,7 @@ const Index = () => {
   // Fetch profiles based on the user's preferences
   const fetchProfiles = async () => {
     try {
-      const response = await axios.get("http://localhost:5000/api/profiles", {
+      const response = await axios.get(`${API_BASE_URL}/api/profiles`, {
         params: {
           userId: userId,
           gender: user?.gender,

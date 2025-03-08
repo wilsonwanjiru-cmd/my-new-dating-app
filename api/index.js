@@ -28,7 +28,7 @@ const server = http.createServer(app);
 // Configure CORS for Express
 app.use(
   cors({
-    origin: "http://localhost:8081", // Allow requests from your Expo app
+    origin: "*", // Allow requests from all origins (for testing)
     credentials: true, // Allow credentials (e.g., cookies, authorization headers)
   })
 );
@@ -36,7 +36,7 @@ app.use(
 // Configure CORS for Socket.IO
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:8081", // Allow Socket.IO connections from your Expo app
+    origin: "*", // Allow connections from all origins (for testing)
     methods: ["GET", "POST"], // Allowed HTTP methods
   },
 });
@@ -63,15 +63,14 @@ mongoose.connection.on("error", (err) => {
 });
 
 // Routes
-app.use("/api/auth", authRoutes); // Authentication routes
-app.use("/api/chat", chatRoutes); // Chat routes
-app.use("/api/email", emailRoutes); // Email verification routes
-app.use("/api/match", matchRoutes); // Match routes
-app.use("/api/message", messageRoutes); // Message routes
-app.use("/api/user", userRoutes); // User routes
-app.use("/api/payments", paymentRoutes); // Payment routes
-app.use("/api/photos", photoRoutes); // Photo routes
-app.use("/api/users", userRoutes); // User routes (duplicate, consider removing)
+app.use("/api/auth", authRoutes);
+app.use("/api/chat", chatRoutes);
+app.use("/api/email", emailRoutes);
+app.use("/api/match", matchRoutes);
+app.use("/api/message", messageRoutes);
+app.use("/api/user", userRoutes);
+app.use("/api/payments", paymentRoutes);
+app.use("/api/photos", photoRoutes);
 
 // Default route
 app.get("/", (req, res) => {

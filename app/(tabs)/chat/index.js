@@ -1,4 +1,5 @@
 // app/(tabs)/chat/index.js
+// app/(tabs)/chat/index.js
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import React, { useState, useEffect, useCallback } from "react";
 import { Ionicons } from "@expo/vector-icons";
@@ -11,6 +12,9 @@ import axios from "axios";
 import { useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import UserChat from "../../../components/UserChat";
+
+// Use the environment variable for the backend URL
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://dating-apps.onrender.com";
 
 const ChatScreen = () => {
   const router = useRouter();
@@ -38,7 +42,7 @@ const ChatScreen = () => {
   const fetchReceivedLikesDetails = async () => {
     try {
       const response = await axios.get(
-        `http://localhost:5000/api/received-likes/${userId}/details`
+        `${API_BASE_URL}/api/received-likes/${userId}/details`
       );
       const receivedLikesDetails = response.data.receivedLikesDetails;
       setProfiles(receivedLikesDetails);
@@ -51,7 +55,7 @@ const ChatScreen = () => {
   const fetchUserMatches = async () => {
     try {
       const response = await axios.get(
-        `http://localhost:5000/api/users/${userId}/matches`
+        `${API_BASE_URL}/api/users/${userId}/matches`
       );
       const userMatches = response.data.matches;
       setMatches(userMatches);

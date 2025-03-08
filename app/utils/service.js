@@ -1,8 +1,11 @@
 import axios from 'axios';
 
+// Use the environment variable for the backend URL
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://dating-apps.onrender.com";
+
 // Create an Axios instance with the base URL
 const api = axios.create({
-  baseURL: process.env.API_BASE_URL || 'http://localhost:5000', // Fallback to localhost:5000 if .env is not set
+  baseURL: API_BASE_URL, // Use the environment variable
   timeout: 10000, // Set a timeout for requests (10 seconds)
 });
 

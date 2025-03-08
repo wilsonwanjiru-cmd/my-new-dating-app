@@ -19,6 +19,9 @@ import "core-js/stable/atob";
 import { jwtDecode } from "jwt-decode";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
+// Use the environment variable for the backend URL
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://dating-apps.onrender.com";
+
 const BioScreen = () => {
   const [option, setOption] = useState("AD");
   const [description, setDescription] = useState("");
@@ -104,7 +107,7 @@ const BioScreen = () => {
 
   const fetchUserDescription = async () => {
     try {
-      const response = await axios.get(`http://localhost:5000/api/users/${userId}`);
+      const response = await axios.get(`${API_BASE_URL}/api/users/${userId}`);
       const user = response.data;
 
       setDescription(user?.description || "");
@@ -125,7 +128,7 @@ const BioScreen = () => {
   const updateUserDescription = async () => {
     try {
       const response = await axios.put(
-        `http://localhost:5000/api/users/${userId}/description`,
+        `${API_BASE_URL}/api/users/${userId}/description`,
         {
           description: description,
         }
@@ -160,7 +163,7 @@ const BioScreen = () => {
   const addLookingFor = async (lookingFor) => {
     try {
       const response = await axios.put(
-        `http://localhost:5000/api/users/${userId}/looking-for`,
+        `${API_BASE_URL}/api/users/${userId}/looking-for`,
         {
           lookingFor: lookingFor,
         }
@@ -177,7 +180,7 @@ const BioScreen = () => {
   const removeLookingFor = async (lookingFor) => {
     try {
       const response = await axios.put(
-        `http://localhost:5000/api/users/${userId}/looking-for/remove`,
+        `${API_BASE_URL}/api/users/${userId}/looking-for/remove`,
         {
           lookingFor: lookingFor,
         }
@@ -194,7 +197,7 @@ const BioScreen = () => {
   const addTurnOn = async (turnOn) => {
     try {
       const response = await axios.put(
-        `http://localhost:5000/api/users/${userId}/turn-ons/add`,
+        `${API_BASE_URL}/api/users/${userId}/turn-ons/add`,
         {
           turnOn: turnOn,
         }
@@ -211,7 +214,7 @@ const BioScreen = () => {
   const removeTurnOn = async (turnOn) => {
     try {
       const response = await axios.put(
-        `http://localhost:5000/api/users/${userId}/turn-ons/remove`,
+        `${API_BASE_URL}/api/users/${userId}/turn-ons/remove`,
         {
           turnOn: turnOn,
         }
@@ -254,7 +257,7 @@ const BioScreen = () => {
   const handleAddImage = async () => {
     try {
       const response = await axios.post(
-        `http://localhost:5000/api/users/${userId}/profile-images`,
+        `${API_BASE_URL}/api/users/${userId}/profile-images`,
         {
           imageUrl: imageUrl,
         }

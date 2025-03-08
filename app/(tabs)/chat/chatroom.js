@@ -17,14 +17,17 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { io } from "socket.io-client";
 import axios from "axios";
 
+// Use the environment variable for the backend URL
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://dating-apps.onrender.com";
+
 const ChatRoom = () => {
   const navigation = useNavigation();
   const [message, setMessage] = useState("");
   const params = useLocalSearchParams();
   const [messages, setMessages] = useState([]);
 
-  // Initialize Socket.IO connection
-  const socket = io("http://localhost:8000");
+  // Initialize Socket.IO connection using the environment variable
+  const socket = io(API_BASE_URL);
 
   // Handle Socket.IO connection
   socket.on("connect", () => {
@@ -99,7 +102,7 @@ const ChatRoom = () => {
       const senderId = params?.senderId;
       const receiverId = params?.receiverId;
 
-      const response = await axios.get("http://localhost:5000/api/messages", {
+      const response = await axios.get(`${API_BASE_URL}/api/messages`, {
         params: { senderId, receiverId },
       });
 

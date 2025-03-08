@@ -6,6 +6,9 @@ import { jwtDecode } from "jwt-decode"; // For decoding JWT tokens
 import axios from "axios"; // For making HTTP requests
 import { useRouter } from "expo-router"; // For navigation
 
+// Use the environment variable for the backend URL
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://dating-apps.onrender.com";
+
 const Select = () => {
   const router = useRouter();
   const [option, setOption] = useState(""); // State to store the selected gender option
@@ -33,7 +36,7 @@ const Select = () => {
   const updateUserGender = async () => {
     try {
       const response = await axios.put(
-        `http://localhost:5000/api/users/${userId}/gender`,
+        `${API_BASE_URL}/api/users/${userId}/gender`,
         { gender: option }
       );
 

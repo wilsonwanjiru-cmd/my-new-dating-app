@@ -13,6 +13,9 @@ import { FontAwesome } from "@expo/vector-icons";
 import axios from "axios";
 import * as Animatable from "react-native-animatable";
 
+// Use the environment variable for the backend URL
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://dating-apps.onrender.com";
+
 const Profile = ({ item, isEven, userId, setProfiles }) => {
   const [liked, setLiked] = useState(false); // State to track if the profile is liked
   const [selected, setSelected] = useState(false); // State to track if the profile is selected
@@ -21,7 +24,7 @@ const Profile = ({ item, isEven, userId, setProfiles }) => {
   const handleLike = async (selectedUserId) => {
     try {
       setLiked(true); // Set liked state to true
-      const response = await axios.post("http://localhost:5000/api/match/send-like", {
+      const response = await axios.post(`${API_BASE_URL}/api/match/send-like`, {
         currentUserId: userId,
         selectedUserId: selectedUserId,
       });
@@ -44,7 +47,7 @@ const Profile = ({ item, isEven, userId, setProfiles }) => {
   const handleLikeOther = async (selectedUserId) => {
     try {
       setSelected(true); // Set selected state to true
-      const response = await axios.post("http://localhost:5000/api/match/send-like", {
+      const response = await axios.post(`${API_BASE_URL}/api/match/send-like`, {
         currentUserId: userId,
         selectedUserId: selectedUserId,
       });
