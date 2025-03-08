@@ -68,9 +68,10 @@ app.use("/api/chat", chatRoutes);
 app.use("/api/email", emailRoutes);
 app.use("/api/match", matchRoutes);
 app.use("/api/message", messageRoutes);
-app.use("/api/user", userRoutes);
+app.use("/api/users", userRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/photos", photoRoutes);
+
 
 // Default route
 app.get("/", (req, res) => {
