@@ -19,14 +19,31 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import api from "../utils/service";
 
 const Login = () => {
-  const [email, setEmail] = useState("wilsonmuita41@gmail.com"); // Pre-filled for testing
-  const [password, setPassword] = useState("WilsonWanjiru@2021"); // Pre-filled for testing
+  const [email, setEmail] = useState("wilsonmuita41@gmail.com");
+  const [password, setPassword] = useState("WilsonWanjiru@2021");
   const [loading, setLoading] = useState(false);
   const [networkError, setNetworkError] = useState(false);
   const [connectionDetails, setConnectionDetails] = useState("");
+  const [currentBaseURL, setCurrentBaseURL] = useState(api.defaults.baseURL);
   const router = useRouter();
 
+  // Set your local IP address here
+  const LOCAL_IP = "192.168.249.233";
+  const LOCAL_BACKEND_URL = `http://${LOCAL_IP}:5000`;
+  const PRODUCTION_BACKEND_URL = "https://dating-apps.onrender.com";
+
   useEffect(() => {
+    const initializeConnection = async () => {
+      // Try to use last working URL from storage
+      const lastUsedUrl = await AsyncStorage.getItem("last_used_api_url");
+      if (lastUsedUrl) {
+        api.defaults.baseURL = lastUsedUrl;
+        setCurrentBaseURL(lastUsedUrl);
+      }
+    };
+
+    initializeConnection();
+
     const checkLoginStatus = async () => {
       try {
         const token = await AsyncStorage.getItem("auth");
@@ -40,46 +57,67 @@ const Login = () => {
     checkLoginStatus();
   }, []);
 
-  const testNetworkConnection = async (url, timeout = 5000) => {
+  const testConnection = async (url, timeout = 8000) => {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeout);
       
-      const response = await fetch(url, {
-        method: 'HEAD',
-        signal: controller.signal
+      const response = await fetch(`${url}/api/health`, {
+        method: 'GET',
+        signal: controller.signal,
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
       });
       
       clearTimeout(timeoutId);
-      return response.ok;
+      
+      if (response.ok) {
+        return {
+          success: true,
+          url,
+          status: response.status
+        };
+      }
+      return {
+        success: false,
+        url,
+        status: response.status
+      };
     } catch (error) {
       console.warn(`Connection test failed for ${url}:`, error.message);
-      return false;
+      return {
+        success: false,
+        url,
+        error: error.message
+      };
     }
   };
 
-  const testAllPossibleConnections = async () => {
-    const connectionTests = [
-      { url: `${api.defaults.baseURL}/api/health`, name: "Primary API" },
-      { url: `http://localhost:5000/api/health`, name: "Localhost" },
-      { url: `http://${getLocalIP()}:5000/api/health`, name: "Local IP" }
-    ];
-
-    for (const test of connectionTests) {
-      const isConnected = await testNetworkConnection(test.url);
-      if (isConnected) {
-        setConnectionDetails(`Connected via ${test.name}`);
-        return true;
-      }
+  const handleConnectionFailure = async () => {
+    // Try fallback to local development server
+    const localTest = await testConnection(LOCAL_BACKEND_URL, 5000);
+    if (localTest.success) {
+      setConnectionDetails(`Connected to local server: ${LOCAL_IP}`);
+      api.defaults.baseURL = LOCAL_BACKEND_URL;
+      setCurrentBaseURL(LOCAL_BACKEND_URL);
+      await AsyncStorage.setItem("last_used_api_url", LOCAL_BACKEND_URL);
+      return true;
+    }
+    
+    // Try fallback to production again in case local failed
+    const productionTest = await testConnection(PRODUCTION_BACKEND_URL, 10000);
+    if (productionTest.success) {
+      setConnectionDetails(`Reconnected to production server`);
+      api.defaults.baseURL = PRODUCTION_BACKEND_URL;
+      setCurrentBaseURL(PRODUCTION_BACKEND_URL);
+      await AsyncStorage.setItem("last_used_api_url", PRODUCTION_BACKEND_URL);
+      return true;
     }
     
     setConnectionDetails("All connection attempts failed");
     return false;
-  };
-
-  const getLocalIP = () => {
-    // Replace with your actual local IP address
-    return "192.168.1.100"; // Example: change this to your real local IP
   };
 
   const handleLoginError = (error) => {
@@ -88,41 +126,46 @@ const Login = () => {
       name: error.name,
       message: error.message,
       code: error.code,
-      config: {
-        baseURL: api.defaults.baseURL,
-        url: error.config?.url,
-        method: error.config?.method
-      },
-      connectionDetails
+      currentBaseURL,
+      connectionDetails,
+      attemptedURLs: [
+        `${currentBaseURL}/api/health`,
+        `${LOCAL_BACKEND_URL}/api/health`
+      ]
     };
 
-    console.error("Login error details:", JSON.stringify(errorDetails, null, 2));
+    console.error("Connection error details:", JSON.stringify(errorDetails, null, 2));
 
-    let errorTitle = "Connection Error";
+    let errorTitle = "Connection Issue";
     let errorMessage = "";
-    let showRetry = true;
+    let actions = [];
 
-    if (error.message === "BACKEND_UNREACHABLE") {
-      errorMessage = `Cannot reach our servers at:\n${api.defaults.baseURL}\n\nPlease:\n1. Verify your computer and phone are on the same WiFi\n2. Check your local IP is correct\n3. Try again`;
-    } else if (error.code === "ERR_NETWORK") {
-      errorMessage = "Network connection failed. Please check your internet connection.";
-    } else if (error.response) {
+    if (error.message.includes("NO_INTERNET")) {
+      errorMessage = "No internet connection detected. Please check your network settings.";
+      actions = [{ text: "OK" }];
+    } 
+    else if (error.message.includes("BACKEND_UNREACHABLE")) {
+      errorMessage = `Cannot connect to our servers.\n\nTried:\n• ${currentBaseURL}\n• Local development server`;
+      actions = [
+        { text: "Try Local Server", onPress: () => {
+          api.defaults.baseURL = LOCAL_BACKEND_URL;
+          setCurrentBaseURL(LOCAL_BACKEND_URL);
+          handleLogin();
+        }},
+        { text: "Retry", onPress: handleLogin }
+      ];
+    }
+    else if (error.response) {
       errorTitle = "Server Error";
       errorMessage = error.response.data?.message || `Server responded with status ${error.response.status}`;
-      showRetry = false;
-    } else {
+      actions = [{ text: "OK" }];
+    }
+    else {
       errorMessage = "An unexpected error occurred. Please try again.";
+      actions = [{ text: "Retry", onPress: handleLogin }];
     }
 
-    Alert.alert(
-      errorTitle,
-      errorMessage,
-      showRetry ? [
-        { text: "Cancel", style: "cancel" },
-        { text: "Retry", onPress: handleLogin }
-      ] : [{ text: "OK" }]
-    );
-
+    Alert.alert(errorTitle, errorMessage, actions);
     setNetworkError(true);
   };
 
@@ -137,20 +180,27 @@ const Login = () => {
     setConnectionDetails("Testing connection...");
 
     try {
-      // First check basic internet connectivity
-      const hasInternet = await testNetworkConnection('https://www.google.com');
-      if (!hasInternet) {
-        throw new Error("NO_INTERNET");
+      // 1. Check basic internet connectivity
+      const internetTest = await testConnection('https://www.google.com', 5000);
+      if (!internetTest.success) {
+        throw new Error("NO_INTERNET: No internet connection");
       }
 
-      // Then check backend specifically
-      const backendAvailable = await testAllPossibleConnections();
-      if (!backendAvailable) {
-        throw new Error("BACKEND_UNREACHABLE");
+      // 2. Test current backend connection
+      const backendTest = await testConnection(currentBaseURL);
+      if (!backendTest.success) {
+        setConnectionDetails(`Primary server unreachable (${backendTest.status || 'timeout'})`);
+        
+        // 3. Attempt fallback connection
+        const fallbackConnected = await handleConnectionFailure();
+        if (!fallbackConnected) {
+          throw new Error("BACKEND_UNREACHABLE: All connection attempts failed");
+        }
+      } else {
+        setConnectionDetails(`Connected to: ${currentBaseURL}`);
       }
 
-      console.log("Attempting login to:", api.defaults.baseURL);
-      
+      // Proceed with login
       const response = await api.post(
         "/api/auth/login",
         {
@@ -160,7 +210,8 @@ const Login = () => {
         {
           headers: { 
             'Content-Type': 'application/json',
-            'X-Debug-Source': 'Expo-App' 
+            'X-Connection-Source': 'Mobile-App',
+            'X-Base-URL': currentBaseURL
           },
           timeout: 15000
         }
@@ -168,7 +219,8 @@ const Login = () => {
 
       await AsyncStorage.multiSet([
         ["auth", response.data.token],
-        ["user", JSON.stringify(response.data.user || {})]
+        ["user", JSON.stringify(response.data.user || {})],
+        ["last_used_api_url", currentBaseURL]
       ]);
 
       router.replace("/(authenticate)/select");
@@ -199,8 +251,11 @@ const Login = () => {
       >
         {networkError && (
           <View style={styles.networkWarning}>
-            <Text style={styles.networkWarningText}>⚠️ Connection Issues Detected</Text>
-            <Text style={styles.connectionDetailsText}>{connectionDetails}</Text>
+            <Text style={styles.networkWarningText}>⚠️ Connection Issue</Text>
+            <Text style={styles.connectionDetailsText}>
+              {connectionDetails}
+              {__DEV__ && `\nCurrent endpoint: ${currentBaseURL}`}
+            </Text>
           </View>
         )}
 
@@ -295,8 +350,9 @@ const Login = () => {
           {/* Debug information - visible in development only */}
           {__DEV__ && (
             <View style={styles.debugContainer}>
-              <Text style={styles.debugText}>API Base: {api.defaults.baseURL}</Text>
+              <Text style={styles.debugText}>API Base: {currentBaseURL}</Text>
               <Text style={styles.debugText}>Connection: {connectionDetails}</Text>
+              <Text style={styles.debugText}>Local IP: {LOCAL_IP}</Text>
             </View>
           )}
         </View>

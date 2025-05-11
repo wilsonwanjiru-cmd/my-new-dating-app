@@ -29,10 +29,11 @@ const server = http.createServer(app);
 // ========== ENHANCED CORS CONFIGURATION ========== //
 const allowedOrigins = [
   'http://localhost:19006',       // Expo web
-  'exp://192.168.249.233:8081',  // Your Expo Go URL (from your logs)
+  'exp://192.168.249.233:8081',  // Your Expo Go URL
   'http://192.168.249.233:8081', // Alternative for web
   'http://localhost:5000',       // Your backend
-  'https://dating-apps.onrender.com' // Your production URL
+  'https://dating-apps.onrender.com',
+  'https://dating-app-3eba.onrender.com' // Added your Render domain
 ];
 
 const corsOptions = {
@@ -74,11 +75,16 @@ const io = new Server(server, {
 app.use(express.json({ limit: '10mb' })); // Increased payload size
 app.use(express.urlencoded({ extended: true }));
 
+// Trust proxy for Render deployment
+app.set('trust proxy', 1);
+
 // Enhanced request logging middleware
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`, {
-    headers: req.headers,
-    body: req.body
+    ip: req.ip,
+    protocol: req.protocol,
+    secure: req.secure,
+    host: req.get('host')
   });
   next();
 });
@@ -88,6 +94,7 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   next();
 });
 
@@ -112,8 +119,10 @@ app.get('/api/debug-test', (req, res) => {
   res.json({ 
     message: "Debug route working!",
     timestamp: new Date().toISOString(),
-    headers: req.headers,
-    environment: process.env.NODE_ENV || 'development'
+    environment: process.env.NODE_ENV || 'development',
+    deployment: 'Render',
+    baseUrl: req.baseUrl,
+    host: req.get('host')
   });
 });
 
@@ -136,7 +145,8 @@ const routes = [
     return acc;
   }, {})) },
   { path: '/api/chat', methods: ['GET', 'POST'] },
-  { path: '/api/health', methods: ['GET'] }
+  { path: '/api/health', methods: ['GET'] },
+  { path: '/api/debug-test', methods: ['GET'] }
   // Add other routes as needed
 ];
 
@@ -148,7 +158,10 @@ app.get("/", (req, res) => {
     message: "Welcome to the My New Dating App API!",
     endpoints: routes,
     status: 'healthy',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+    deployment: 'Render',
+    baseUrl: req.baseUrl
   });
 });
 
@@ -158,7 +171,8 @@ app.use((req, res, next) => {
   res.status(404).json({ 
     message: "Endpoint not found",
     requestedUrl: req.originalUrl,
-    availableEndpoints: routes
+    availableEndpoints: routes,
+    help: "Try GET /api/health or GET /api/debug-test"
   });
 });
 
@@ -169,14 +183,15 @@ app.use((err, req, res, next) => {
     stack: err.stack,
     url: req.originalUrl,
     method: req.method,
-    body: req.body
+    ip: req.ip
   });
 
   res.status(err.status || 500).json({
     error: {
       message: err.message || "Internal Server Error",
       code: err.code,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      endpoint: req.originalUrl
     }
   });
 });
@@ -243,6 +258,7 @@ server.listen(PORT, HOST, () => {
   console.log(`- GET http://${HOST}:${PORT}/api/debug-test`);
   console.log(`- GET http://${HOST}:${PORT}/api/health`);
   console.log(`- POST http://${HOST}:${PORT}/api/auth/login`);
+  console.log(`- Current NODE_ENV: ${process.env.NODE_ENV || 'development'}`);
 });
 
 // Handle shutdown gracefully
