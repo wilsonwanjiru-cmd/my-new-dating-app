@@ -18,14 +18,28 @@ const config = {
   tokenExpiry: 24 * 60 * 60 * 1000 // 24 hours
 };
 
-// Create reusable transporter object
-const transporter = nodemailer.createTransport({
-  service: config.email.service,
-  auth: config.email.auth,
-  tls: {
-    rejectUnauthorized: process.env.NODE_ENV === 'production'
-  }
-});
+// Create reusable transporter object with better error handling
+let transporter;
+try {
+  transporter = nodemailer.createTransport({
+    service: config.email.service,
+    auth: config.email.auth,
+    tls: {
+      rejectUnauthorized: process.env.NODE_ENV === 'production'
+    }
+  });
+
+  // Verify connection configuration
+  transporter.verify(function(error) {
+    if (error) {
+      console.error('Email transporter verification failed:', error);
+    } else {
+      console.log('Email transporter is ready to send messages');
+    }
+  });
+} catch (transportError) {
+  console.error('Failed to create email transporter:', transportError);
+}
 
 // Email Templates
 const templates = {
@@ -67,8 +81,13 @@ const templates = {
   })
 };
 
-// Email Service
+// Email Service with improved error handling
 exports.sendVerificationEmail = async (email, verificationToken) => {
+  if (!transporter) {
+    console.warn('Email transporter not initialized - skipping email sending');
+    return; // Don't throw error to allow registration to complete
+  }
+
   try {
     const verificationLink = `${config.baseUrl}/api/email/verify/${verificationToken}`;
     const expiryDate = new Date(Date.now() + config.tokenExpiry).toLocaleString();
@@ -84,23 +103,33 @@ exports.sendVerificationEmail = async (email, verificationToken) => {
 
     // Schedule token cleanup
     setTimeout(async () => {
-      await User.findOneAndUpdate(
-        { email, verificationToken, verified: false },
-        { $unset: { verificationToken: "" } }
-      );
+      try {
+        await User.findOneAndUpdate(
+          { email, verificationToken, verified: false },
+          { $unset: { verificationToken: "" } }
+        );
+      } catch (cleanupError) {
+        console.error('Failed to cleanup verification token:', cleanupError);
+      }
     }, config.tokenExpiry);
 
   } catch (error) {
     console.error(`[Email Error] Failed to send to ${email}:`, error);
-    throw error;
+    // Don't throw error to allow registration to complete
+    // Just log the error and continue
   }
 };
 
-// Verification Endpoint
+// Verification Endpoint with improved responses
 exports.verifyEmail = async (req, res) => {
   try {
     const { token } = req.params;
-    if (!token) return res.status(400).json({ success: false, message: "Token required" });
+    if (!token) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Verification token is required" 
+      });
+    }
 
     const user = await User.findOneAndUpdate(
       { verificationToken: token, verified: false },
@@ -112,13 +141,14 @@ exports.verifyEmail = async (req, res) => {
     );
 
     if (!user) {
-      return res.status(404).json({ 
+      return res.status(400).json({ 
         success: false,
-        message: "Invalid or expired verification link" 
+        message: "Invalid, expired, or already used verification link",
+        action: "Please request a new verification link if needed"
       });
     }
 
-    res.status(200).json({ 
+    return res.status(200).json({ 
       success: true,
       message: "Email verified successfully",
       user: {
@@ -131,10 +161,13 @@ exports.verifyEmail = async (req, res) => {
 
   } catch (error) {
     console.error("[Verification Error]", error);
-    res.status(500).json({ 
+    return res.status(500).json({ 
       success: false,
-      message: "Verification failed",
-      ...(process.env.NODE_ENV === 'development' && { error: error.message })
+      message: "Internal server error during verification",
+      ...(process.env.NODE_ENV === 'development' && { 
+        error: error.message,
+        stack: error.stack 
+      })
     });
   }
 };
