@@ -8,6 +8,10 @@ const { Server } = require("socket.io");
 // Load environment variables
 dotenv.config();
 
+// Constants
+const PRODUCTION_URL = 'https://ruda-backend.onrender.com';
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+
 // Import routes
 const authRoutes = require("./routes/authRoutes");
 const chatRoutes = require("./routes/chatRoutes");
@@ -32,8 +36,8 @@ const allowedOrigins = [
   'exp://192.168.249.233:8081',  // Your Expo Go URL
   'http://192.168.249.233:8081', // Alternative for web
   'http://localhost:5000',       // Your backend
-  'https://dating-apps.onrender.com',
-  'https://dating-app-3eba.onrender.com' // Added your Render domain
+  PRODUCTION_URL,                // Primary production URL
+  'https://dating-apps.onrender.com' // Legacy URL
 ];
 
 const corsOptions = {
@@ -94,7 +98,9 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-XSS-Protection', '1; mode=block');
-  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  if (IS_PRODUCTION) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
   next();
 });
 
@@ -121,7 +127,7 @@ app.get('/api/debug-test', (req, res) => {
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development',
     deployment: 'Render',
-    baseUrl: req.baseUrl,
+    baseUrl: IS_PRODUCTION ? PRODUCTION_URL : `http://localhost:${process.env.PORT || 5000}`,
     host: req.get('host')
   });
 });
@@ -147,7 +153,6 @@ const routes = [
   { path: '/api/chat', methods: ['GET', 'POST'] },
   { path: '/api/health', methods: ['GET'] },
   { path: '/api/debug-test', methods: ['GET'] }
-  // Add other routes as needed
 ];
 
 console.table(routes);
@@ -155,13 +160,13 @@ console.table(routes);
 // Default route
 app.get("/", (req, res) => {
   res.json({ 
-    message: "Welcome to the My New Dating App API!",
+    message: "Welcome to the Ruda Dating App API!",
     endpoints: routes,
     status: 'healthy',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development',
     deployment: 'Render',
-    baseUrl: req.baseUrl
+    baseUrl: IS_PRODUCTION ? PRODUCTION_URL : `http://localhost:${process.env.PORT || 5000}`
   });
 });
 
@@ -180,7 +185,7 @@ app.use((req, res, next) => {
 app.use((err, req, res, next) => {
   console.error("🔥 Error:", {
     message: err.message,
-    stack: err.stack,
+    stack: IS_PRODUCTION ? undefined : err.stack,
     url: req.originalUrl,
     method: req.method,
     ip: req.ip
@@ -189,9 +194,8 @@ app.use((err, req, res, next) => {
   res.status(err.status || 500).json({
     error: {
       message: err.message || "Internal Server Error",
-      code: err.code,
-      timestamp: new Date().toISOString(),
-      endpoint: req.originalUrl
+      ...(!IS_PRODUCTION && { stack: err.stack }),
+      timestamp: new Date().toISOString()
     }
   });
 });
@@ -252,13 +256,13 @@ const PORT = process.env.PORT || 5000;
 const HOST = process.env.HOST || '0.0.0.0';
 
 server.listen(PORT, HOST, () => {
-  console.log(`🚀 Server running on http://${HOST}:${PORT}`);
+  console.log(`
+  🚀 Server running in ${process.env.NODE_ENV || 'development'} mode
+  - Local: http://${HOST}:${PORT}
+  - Production URL: ${PRODUCTION_URL}
+  - Database: ${mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'}
+  `);
   console.log('🔒 CORS-protected origins:', allowedOrigins);
-  console.log('Try these endpoints:');
-  console.log(`- GET http://${HOST}:${PORT}/api/debug-test`);
-  console.log(`- GET http://${HOST}:${PORT}/api/health`);
-  console.log(`- POST http://${HOST}:${PORT}/api/auth/login`);
-  console.log(`- Current NODE_ENV: ${process.env.NODE_ENV || 'development'}`);
 });
 
 // Handle shutdown gracefully
