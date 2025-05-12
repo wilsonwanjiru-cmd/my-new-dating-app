@@ -2,131 +2,196 @@ const nodemailer = require("nodemailer");
 const User = require("../models/user");
 require('dotenv').config();
 
-// Configuration - Ensure these match your Render dashboard
+// Configuration with enhanced environment handling
 const config = {
   baseUrl: process.env.NODE_ENV === 'production' 
-    ? 'https://ruda-backend.onrender.com' 
-    : 'http://localhost:5000',
+    ? process.env.PRODUCTION_URL || 'https://ruda-backend.onrender.com'
+    : process.env.LOCAL_URL || `http://${process.env.LOCAL_IP || 'localhost'}:${process.env.PORT || 5000}`,
+  
   email: {
     service: process.env.SMTP_SERVICE || 'gmail',
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASSWORD
     },
-    from: `Ruda Dating App <${process.env.SMTP_FROM || process.env.SMTP_USER}>`
+    from: process.env.SMTP_FROM || `Ruda Dating App <${process.env.SMTP_USER}>`,
+    // Additional SMTP options for production
+    port: process.env.SMTP_PORT || 587,
+    secure: process.env.SMTP_SECURE === 'true'
   },
-  tokenExpiry: 24 * 60 * 60 * 1000 // 24 hours
+  tokenExpiry: 24 * 60 * 60 * 1000, // 24 hours
+  frontendUrl: process.env.FRONTEND_URL || 'https://your-frontend-app.com'
 };
 
-// Create reusable transporter object with better error handling
+// Enhanced transporter setup with fallback options
 let transporter;
-try {
-  transporter = nodemailer.createTransport({
-    service: config.email.service,
-    auth: config.email.auth,
-    tls: {
-      rejectUnauthorized: process.env.NODE_ENV === 'production'
-    }
-  });
+const initializeTransporter = () => {
+  try {
+    const transportConfig = {
+      host: process.env.SMTP_HOST,
+      port: config.email.port,
+      secure: config.email.secure,
+      auth: config.email.auth,
+      tls: {
+        rejectUnauthorized: process.env.NODE_ENV === 'production'
+      }
+    };
 
-  // Verify connection configuration
-  transporter.verify(function(error) {
-    if (error) {
-      console.error('Email transporter verification failed:', error);
-    } else {
-      console.log('Email transporter is ready to send messages');
-    }
-  });
-} catch (transportError) {
-  console.error('Failed to create email transporter:', transportError);
-}
+    // Clean up undefined values
+    Object.keys(transportConfig).forEach(key => 
+      transportConfig[key] === undefined && delete transportConfig[key]
+    );
 
-// Email Templates
+    transporter = nodemailer.createTransport(transportConfig);
+
+    // Verify connection in production only
+    if (process.env.NODE_ENV === 'production') {
+      transporter.verify((error) => {
+        if (error) {
+          console.error('SMTP Connection Error:', error);
+        } else {
+          console.log('SMTP Connection Verified');
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Transporter Initialization Failed:', error);
+  }
+};
+
+initializeTransporter();
+
+// Enhanced email templates with mobile optimization
 const templates = {
-  verification: (link, expiryDate) => ({
-    subject: "Verify Your Ruda Dating App Account",
-    text: `Please verify your email by clicking: ${link}\nLink expires: ${expiryDate}`,
+  verification: (link, expiryDate, user) => ({
+    subject: "Complete Your Ruda Dating App Registration",
+    text: `Welcome to Ruda Dating App!\n\nPlease verify your email by clicking: ${link}\n\nThis link expires: ${expiryDate}`,
     html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <div style="text-align: center; margin-bottom: 30px;">
-          <h2 style="color: #2c3e50;">Welcome to Ruda Dating App!</h2>
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px; color: #333; }
+          .header { text-align: center; margin-bottom: 30px; }
+          .button { display: block; width: 80%; max-width: 250px; margin: 25px auto; padding: 15px; 
+                    background-color: #3498db; color: white; text-align: center; text-decoration: none; 
+                    border-radius: 5px; font-size: 16px; font-weight: bold; }
+          .footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #ecf0f1; font-size: 12px; color: #95a5a6; }
+          .code { word-break: break-all; font-family: monospace; background: #f5f5f5; padding: 10px; margin: 10px 0; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h2 style="color: #2c3e50;">Welcome to Ruda Dating App, ${user.name}!</h2>
         </div>
         
-        <p style="font-size: 16px;">Hello,</p>
-        <p style="font-size: 16px;">Please verify your email address to activate your account:</p>
+        <p>Hello,</p>
+        <p>Please verify your email address to activate your account:</p>
         
-        <div style="text-align: center; margin: 30px 0;">
-          <a href="${link}"
-            style="display: inline-block; padding: 12px 24px; 
-                   background-color: #3498db; color: white; 
-                   text-decoration: none; border-radius: 4px; 
-                   font-size: 16px; font-weight: bold;">
-            Verify Email
-          </a>
-        </div>
+        <a href="${link}" class="button">Verify Email Now</a>
         
-        <p style="font-size: 14px; color: #7f8c8d;">
+        <p style="color: #7f8c8d;">
           <strong>Expires:</strong> ${expiryDate}<br>
           <strong>Not you?</strong> Please ignore this email.
         </p>
         
-        <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #ecf0f1;">
-          <p style="font-size: 12px; color: #95a5a6;">
-            Having trouble? Copy this link to your browser:<br>
-            <code style="word-break: break-all; font-size: 11px;">${link}</code>
-          </p>
+        <div class="footer">
+          <p>Having trouble? Copy this link to your browser:</p>
+          <div class="code">${link}</div>
+          <p>If you didn't request this, please contact support.</p>
         </div>
-      </div>
+      </body>
+      </html>
     `
   })
 };
 
-// Email Service with improved error handling
+// Enhanced email service with comprehensive error handling
 exports.sendVerificationEmail = async (email, verificationToken) => {
   if (!transporter) {
-    console.warn('Email transporter not initialized - skipping email sending');
-    return; // Don't throw error to allow registration to complete
+    console.warn('Email transporter not initialized - attempting to reconnect');
+    initializeTransporter();
+    if (!transporter) {
+      console.error('Email sending aborted - no transporter available');
+      return { success: false, error: 'Email service unavailable' };
+    }
   }
 
   try {
+    const user = await User.findOne({ email });
+    if (!user) {
+      console.error(`User not found for email: ${email}`);
+      return { success: false, error: 'User not found' };
+    }
+
     const verificationLink = `${config.baseUrl}/api/email/verify/${verificationToken}`;
     const expiryDate = new Date(Date.now() + config.tokenExpiry).toLocaleString();
 
     const mailOptions = {
       from: config.email.from,
       to: email,
-      ...templates.verification(verificationLink, expiryDate)
+      ...templates.verification(verificationLink, expiryDate, user),
+      // Add headers for better email delivery
+      headers: {
+        'X-Priority': '1',
+        'X-Mailer': 'Ruda Dating App'
+      }
     };
 
-    await transporter.sendMail(mailOptions);
-    console.log(`[Email] Verification sent to ${email}`);
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`Email sent to ${email}`, info.messageId);
 
     // Schedule token cleanup
     setTimeout(async () => {
       try {
-        await User.findOneAndUpdate(
+        const result = await User.findOneAndUpdate(
           { email, verificationToken, verified: false },
-          { $unset: { verificationToken: "" } }
+          { $unset: { verificationToken: "" } },
+          { new: true }
         );
+        if (result) {
+          console.log(`Cleaned up expired token for ${email}`);
+        }
       } catch (cleanupError) {
-        console.error('Failed to cleanup verification token:', cleanupError);
+        console.error('Token cleanup failed:', cleanupError);
       }
     }, config.tokenExpiry);
 
+    return { success: true, messageId: info.messageId };
+
   } catch (error) {
-    console.error(`[Email Error] Failed to send to ${email}:`, error);
-    // Don't throw error to allow registration to complete
-    // Just log the error and continue
+    console.error(`Email sending failed to ${email}:`, error);
+    
+    // Special handling for common SMTP errors
+    if (error.code === 'EAUTH') {
+      console.error('Authentication failed - check SMTP credentials');
+    } else if (error.code === 'ECONNECTION') {
+      console.error('Connection to SMTP server failed');
+    }
+    
+    return { 
+      success: false, 
+      error: error.message,
+      code: error.code 
+    };
   }
 };
 
-// Verification Endpoint with improved responses
+// Enhanced verification endpoint with redirect support
 exports.verifyEmail = async (req, res) => {
   try {
     const { token } = req.params;
+    
+    // Handle HEAD requests (for email clients checking links)
+    if (req.method === 'HEAD') {
+      return res.status(200).end();
+    }
+
     if (!token) {
       return res.status(400).json({ 
         success: false, 
+        code: 'MISSING_TOKEN',
         message: "Verification token is required" 
       });
     }
@@ -141,33 +206,83 @@ exports.verifyEmail = async (req, res) => {
     );
 
     if (!user) {
-      return res.status(400).json({ 
+      const errorResponse = {
         success: false,
-        message: "Invalid, expired, or already used verification link",
-        action: "Please request a new verification link if needed"
-      });
+        code: 'INVALID_TOKEN',
+        message: "This verification link is invalid or expired",
+        action: "request_new_link"
+      };
+      
+      // Redirect to frontend with error if Accept header prefers HTML
+      if (req.accepts('html')) {
+        return res.redirect(`${config.frontendUrl}/verify-error?${new URLSearchParams(errorResponse)}`);
+      }
+      
+      return res.status(400).json(errorResponse);
     }
 
-    return res.status(200).json({ 
+    const successResponse = {
       success: true,
       message: "Email verified successfully",
       user: {
         id: user._id,
         email: user.email,
-        name: user.name,
-        verified: user.verified
+        name: user.name
       }
-    });
+    };
+
+    // Redirect to frontend success page if Accept header prefers HTML
+    if (req.accepts('html')) {
+      return res.redirect(`${config.frontendUrl}/verify-success?${new URLSearchParams(successResponse)}`);
+    }
+
+    return res.status(200).json(successResponse);
 
   } catch (error) {
-    console.error("[Verification Error]", error);
-    return res.status(500).json({ 
+    console.error("Verification Error:", error);
+    
+    const errorResponse = {
       success: false,
+      code: 'SERVER_ERROR',
       message: "Internal server error during verification",
       ...(process.env.NODE_ENV === 'development' && { 
         error: error.message,
         stack: error.stack 
       })
+    };
+    
+    if (req.accepts('html')) {
+      return res.redirect(`${config.frontendUrl}/verify-error?${new URLSearchParams(errorResponse)}`);
+    }
+    
+    return res.status(500).json(errorResponse);
+  }
+};
+
+// Additional helper function for frontend verification checks
+exports.checkVerificationStatus = async (req, res) => {
+  try {
+    const { email } = req.params;
+    const user = await User.findOne({ email });
+    
+    if (!user) {
+      return res.status(404).json({ 
+        success: false,
+        message: "User not found" 
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      verified: user.verified,
+      canResend: !user.verified
+    });
+
+  } catch (error) {
+    console.error("Verification check error:", error);
+    return res.status(500).json({ 
+      success: false,
+      message: "Failed to check verification status" 
     });
   }
 };
