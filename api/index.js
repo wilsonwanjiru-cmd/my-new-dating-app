@@ -4,6 +4,8 @@ const dotenv = require("dotenv");
 const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
+const os = require('os');
+const process = require('process');
 
 // Load environment variables
 dotenv.config();
@@ -30,24 +32,20 @@ const connectDB = require("./config/db");
 const app = express();
 const server = http.createServer(app);
 
-// ========== ENHANCED CORS CONFIGURATION ========== //
+// ========== CORS CONFIGURATION ========== //
 const allowedOrigins = [
-  'http://localhost:19006',       // Expo web
-  'exp://192.168.249.233:8081',  // Your Expo Go URL
-  'http://192.168.249.233:8081', // Alternative for web
-  'http://localhost:5000',       // Your backend
-  PRODUCTION_URL,                // Primary production URL
-  'https://dating-apps.onrender.com' // Legacy URL
+  'http://localhost:19006',
+  'exp://192.168.249.233:8081',
+  'http://192.168.249.233:8081',
+  'http://localhost:5000',
+  PRODUCTION_URL,
+  'https://dating-apps.onrender.com'
 ];
 
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.indexOf(origin) !== -1 || allowedOrigins.some(allowedOrigin => {
-      return origin.startsWith(allowedOrigin.replace('*', ''));
-    })) {
+    if (allowedOrigins.some(allowedOrigin => origin.startsWith(allowedOrigin))) {
       callback(null, true);
     } else {
       console.warn(`⚠️ Blocked by CORS: ${origin}`);
@@ -59,10 +57,9 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 };
 
-// Apply CORS middleware
 app.use(cors(corsOptions));
 
-// Configure CORS for Socket.IO
+// Configure Socket.IO
 const io = new Server(server, {
   cors: {
     origin: allowedOrigins,
@@ -70,30 +67,23 @@ const io = new Server(server, {
     credentials: true
   },
   connectionStateRecovery: {
-    maxDisconnectionDuration: 2 * 60 * 1000, // 2 minutes
+    maxDisconnectionDuration: 2 * 60 * 1000,
     skipMiddlewares: true
   }
 });
 
-// ========== ENHANCED MIDDLEWARE ========== //
-app.use(express.json({ limit: '10mb' })); // Increased payload size
+// ========== MIDDLEWARE ========== //
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
-
-// Trust proxy for Render deployment
 app.set('trust proxy', 1);
 
-// Enhanced request logging middleware
+// Request logging
 app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`, {
-    ip: req.ip,
-    protocol: req.protocol,
-    secure: req.secure,
-    host: req.get('host')
-  });
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
   next();
 });
 
-// Add security headers
+// Security headers
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -107,32 +97,27 @@ app.use((req, res, next) => {
 // Connect to MongoDB
 connectDB();
 
-// Database connection events
 mongoose.connection.on("connected", () => {
-  console.log("✅ Connected to MongoDB successfully");
-  console.log(`Database: ${mongoose.connection.db.databaseName}`);
-  console.log(`Models: ${Object.keys(mongoose.connection.models).join(', ')}`);
+  console.log("✅ MongoDB connected to:", mongoose.connection.db.databaseName);
 });
 
 mongoose.connection.on("error", (err) => {
-  console.error("❌ MongoDB connection error:", err.message);
-  process.exit(1); // Exit on DB connection error
+  console.error("❌ MongoDB error:", err.message);
+  process.exit(1);
 });
 
-// ========== ROUTE REGISTRATION ========== //
-// Debugging route to test basic routing
+// ========== ROUTES ========== //
+// Debug route
 app.get('/api/debug-test', (req, res) => {
   res.json({ 
-    message: "Debug route working!",
+    status: 'ok',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development',
-    deployment: 'Render',
-    baseUrl: IS_PRODUCTION ? PRODUCTION_URL : `http://localhost:${process.env.PORT || 5000}`,
-    host: req.get('host')
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
-// API Routes
+// API Routes - Health routes first
+app.use('/api', healthRoutes);  // Handles /api/health
 app.use("/api/auth", authRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/email", emailRoutes);
@@ -141,113 +126,84 @@ app.use("/api/message", messageRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/photos", photoRoutes);
-app.use('/api/health', healthRoutes);
 
-// Route registration debug
-console.log('🚀 Routes registered:');
-const routes = [
-  { path: '/api/auth', methods: Object.keys(authRoutes.stack.reduce((acc, layer) => {
-    if (layer.route) acc[layer.route.stack[0].method] = true;
-    return acc;
-  }, {})) },
-  { path: '/api/chat', methods: ['GET', 'POST'] },
+// System info endpoint
+app.get('/api/system-info', (req, res) => {
+  res.json({
+    status: 'operational',
+    timestamp: new Date().toISOString(),
+    system: {
+      platform: os.platform(),
+      uptime: os.uptime(),
+      memory: {
+        total: os.totalmem(),
+        free: os.freemem()
+      }
+    },
+    database: {
+      status: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+    }
+  });
+});
+
+// Registered routes for documentation
+const registeredRoutes = [
   { path: '/api/health', methods: ['GET'] },
-  { path: '/api/debug-test', methods: ['GET'] }
+  { path: '/api/auth', methods: ['POST'] },
+  { path: '/api/chat', methods: ['GET', 'POST'] },
+  { path: '/api/debug-test', methods: ['GET'] },
+  { path: '/api/system-info', methods: ['GET'] }
 ];
-
-console.table(routes);
 
 // Default route
 app.get("/", (req, res) => {
   res.json({ 
-    message: "Welcome to the Ruda Dating App API!",
-    endpoints: routes,
+    message: "Ruda Dating App API",
     status: 'healthy',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development',
-    deployment: 'Render',
-    baseUrl: IS_PRODUCTION ? PRODUCTION_URL : `http://localhost:${process.env.PORT || 5000}`
+    endpoints: registeredRoutes,
+    timestamp: new Date().toISOString()
   });
 });
 
-// 404 Handler for unmatched routes
-app.use((req, res, next) => {
-  console.error(`⚠️ 404: No route for ${req.method} ${req.originalUrl}`);
+// 404 Handler
+app.use((req, res) => {
   res.status(404).json({ 
     message: "Endpoint not found",
     requestedUrl: req.originalUrl,
-    availableEndpoints: routes,
+    availableEndpoints: registeredRoutes,
     help: "Try GET /api/health or GET /api/debug-test"
   });
 });
 
-// Global error handler
+// Error handler
 app.use((err, req, res, next) => {
-  console.error("🔥 Error:", {
-    message: err.message,
-    stack: IS_PRODUCTION ? undefined : err.stack,
-    url: req.originalUrl,
-    method: req.method,
-    ip: req.ip
-  });
-
-  res.status(err.status || 500).json({
-    error: {
-      message: err.message || "Internal Server Error",
-      ...(!IS_PRODUCTION && { stack: err.stack }),
-      timestamp: new Date().toISOString()
-    }
+  console.error("Error:", err.message);
+  res.status(err.status || 500).json({ 
+    error: err.message,
+    timestamp: new Date().toISOString()
   });
 });
 
-// ========== SOCKET.IO ENHANCEMENTS ========== //
+// ========== SOCKET.IO ========== //
 io.on("connection", (socket) => {
-  console.log(`⚡ Socket connected: ${socket.id} from ${socket.handshake.headers.origin}`);
-
-  // Add authentication middleware for sockets
-  socket.use((packet, next) => {
-    const [event, data] = packet;
-    console.log(`Socket event: ${event}`, data);
-    next();
-  });
+  console.log(`Socket connected: ${socket.id}`);
 
   socket.on("sendMessage", async (data) => {
     try {
-      const { senderId, receiverId, message, attachments } = data;
       const Chat = require("./models/Chat");
-
       const newMessage = new Chat({
-        senderId,
-        receiverId,
-        message,
-        attachments,
-        delivered: false,
-        read: false,
+        ...data,
         timestamp: new Date()
       });
-      
       const savedMessage = await newMessage.save();
-      
-      io.to(receiverId).emit("receiveMessage", savedMessage);
-      socket.emit("messageDelivered", { 
-        messageId: savedMessage._id,
-        timestamp: new Date() 
-      });
+      io.to(data.receiverId).emit("receiveMessage", savedMessage);
     } catch (error) {
       console.error("Socket error:", error);
-      socket.emit("messageError", { 
-        error: error.message,
-        originalMessage: data 
-      });
     }
   });
 
-  socket.on("disconnect", (reason) => {
-    console.log(`Socket disconnected (${reason}): ${socket.id}`);
-  });
-
-  socket.on("error", (err) => {
-    console.error(`Socket error (${socket.id}):`, err);
+  socket.on("disconnect", () => {
+    console.log(`Socket disconnected: ${socket.id}`);
   });
 });
 
@@ -257,29 +213,22 @@ const HOST = process.env.HOST || '0.0.0.0';
 
 server.listen(PORT, HOST, () => {
   console.log(`
-  🚀 Server running in ${process.env.NODE_ENV || 'development'} mode
-  - Local: http://${HOST}:${PORT}
-  - Production URL: ${PRODUCTION_URL}
-  - Database: ${mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'}
+  🚀 Server running on http://${HOST}:${PORT}
+  Environment: ${process.env.NODE_ENV || 'development'}
+  Database: ${mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'}
   `);
-  console.log('🔒 CORS-protected origins:', allowedOrigins);
 });
 
-// Handle shutdown gracefully
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received. Shutting down gracefully...');
+// Graceful shutdown
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
+function shutdown() {
+  console.log('Shutting down gracefully...');
   server.close(() => {
-    console.log('HTTP server closed.');
     mongoose.connection.close(false, () => {
-      console.log('MongoDB connection closed.');
+      console.log('Server stopped');
       process.exit(0);
     });
   });
-});
-
-process.on('SIGINT', () => {
-  console.log('SIGINT received. Shutting down...');
-  server.close(() => {
-    mongoose.connection.close(false, () => process.exit(0));
-  });
-});
+}
