@@ -4,8 +4,8 @@ const dotenv = require("dotenv");
 const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
-const os = require('os');
-const process = require('process');
+const os = require("os");
+const process = require("process");
 
 // Load environment variables
 dotenv.config();
@@ -59,23 +59,21 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// Configure Socket.IO
-const io = new Server(server, {
-  cors: {
-    origin: allowedOrigins,
-    methods: ["GET", "POST"],
-    credentials: true
-  },
-  connectionStateRecovery: {
-    maxDisconnectionDuration: 2 * 60 * 1000,
-    skipMiddlewares: true
-  }
-});
+// ========== FORCE HTTPS IN PRODUCTION ========== //
+app.set('trust proxy', 1); // Trust proxy headers from Render
+
+if (IS_PRODUCTION) {
+  app.use((req, res, next) => {
+    if (req.headers['x-forwarded-proto'] !== 'https') {
+      return res.redirect(`https://${req.headers.host}${req.url}`);
+    }
+    next();
+  });
+}
 
 // ========== MIDDLEWARE ========== //
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.set('trust proxy', 1);
 
 // Request logging
 app.use((req, res, next) => {
@@ -109,7 +107,7 @@ mongoose.connection.on("error", (err) => {
 // ========== ROUTES ========== //
 // Debug route
 app.get('/api/debug-test', (req, res) => {
-  res.json({ 
+  res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development'
@@ -117,7 +115,7 @@ app.get('/api/debug-test', (req, res) => {
 });
 
 // API Routes - Health routes first
-app.use('/api', healthRoutes);  // Handles /api/health
+app.use('/api', healthRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/email", emailRoutes);
@@ -157,7 +155,7 @@ const registeredRoutes = [
 
 // Default route
 app.get("/", (req, res) => {
-  res.json({ 
+  res.json({
     message: "Ruda Dating App API",
     status: 'healthy',
     endpoints: registeredRoutes,
@@ -167,7 +165,7 @@ app.get("/", (req, res) => {
 
 // 404 Handler
 app.use((req, res) => {
-  res.status(404).json({ 
+  res.status(404).json({
     message: "Endpoint not found",
     requestedUrl: req.originalUrl,
     availableEndpoints: registeredRoutes,
@@ -178,13 +176,25 @@ app.use((req, res) => {
 // Error handler
 app.use((err, req, res, next) => {
   console.error("Error:", err.message);
-  res.status(err.status || 500).json({ 
+  res.status(err.status || 500).json({
     error: err.message,
     timestamp: new Date().toISOString()
   });
 });
 
 // ========== SOCKET.IO ========== //
+const io = new Server(server, {
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  connectionStateRecovery: {
+    maxDisconnectionDuration: 2 * 60 * 1000,
+    skipMiddlewares: true
+  }
+});
+
 io.on("connection", (socket) => {
   console.log(`Socket connected: ${socket.id}`);
 
