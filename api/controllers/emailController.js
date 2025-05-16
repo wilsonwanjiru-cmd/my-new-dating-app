@@ -150,7 +150,8 @@ exports.sendVerificationEmail = async (email, verificationToken) => {
     }
 
     // Generate verification link that points to frontend
-    const verificationLink = `${config.frontendUrl}${config.verificationPath}?token=${verificationToken}&email=${encodeURIComponent(email)}`;
+   // With this production-ready version:
+const verificationLink = `${config.frontendUrl}${config.verificationPath}?token=${verificationToken}&email=${encodeURIComponent(email)}`;
     const expiryDate = new Date(Date.now() + config.tokenExpiry).toLocaleString();
 
     const mailOptions = {
