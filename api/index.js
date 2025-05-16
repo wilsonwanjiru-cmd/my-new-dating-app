@@ -39,7 +39,7 @@ const allowedOrigins = [
   'http://192.168.249.233:8081',
   'http://localhost:5000',
   PRODUCTION_URL,
-  'https://dating-apps.onrender.com'
+  'https://api.rudadatingsite.singles/'
 ];
 
 const corsOptions = {
