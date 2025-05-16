@@ -16,45 +16,55 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { AntDesign } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Network from 'expo-network';
 import api from "../utils/service";
 
 const Login = () => {
-  const [email, setEmail] = useState("wilsonmuita41@gmail.com");
-  const [password, setPassword] = useState("WilsonWanjiru@2021");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [networkError, setNetworkError] = useState(false);
   const [connectionDetails, setConnectionDetails] = useState("");
   const [currentBaseURL, setCurrentBaseURL] = useState(api.defaults.baseURL);
   const router = useRouter();
 
-  // Set your local IP address here
-  const LOCAL_IP = "192.168.249.233";
+  // Configuration
+  const LOCAL_IP = "192.168.232.233";
   const LOCAL_BACKEND_URL = `http://${LOCAL_IP}:5000`;
   const PRODUCTION_BACKEND_URL = "https://dating-apps.onrender.com";
+  const CONNECTION_TIMEOUT = 15000;
+  const HEALTH_CHECK_ENDPOINT = "/api/health";
 
   useEffect(() => {
-    const initializeConnection = async () => {
-      // Try to use last working URL from storage
-      const lastUsedUrl = await AsyncStorage.getItem("last_used_api_url");
-      if (lastUsedUrl) {
-        api.defaults.baseURL = lastUsedUrl;
-        setCurrentBaseURL(lastUsedUrl);
-      }
-    };
-
-    initializeConnection();
-
-    const checkLoginStatus = async () => {
+    const initializeApp = async () => {
       try {
+        // Check network connectivity
+        const networkState = await Network.getNetworkStateAsync();
+        if (!networkState.isConnected) {
+          setNetworkError(true);
+          setConnectionDetails("No network connection detected");
+          return;
+        }
+
+        // Try to use last working URL from storage
+        const lastUsedUrl = await AsyncStorage.getItem("last_used_api_url");
+        const initialUrl = lastUsedUrl || PRODUCTION_BACKEND_URL;
+        
+        api.defaults.baseURL = initialUrl;
+        setCurrentBaseURL(initialUrl);
+
+        // Check if already logged in
         const token = await AsyncStorage.getItem("auth");
         if (token) {
           router.replace("/(tabs)/profile");
         }
       } catch (error) {
-        console.log("Error checking login status:", error);
+        console.error("Initialization error:", error);
+        setConnectionDetails("Initialization failed");
       }
     };
-    checkLoginStatus();
+
+    initializeApp();
   }, []);
 
   const testConnection = async (url, timeout = 8000) => {
@@ -62,7 +72,8 @@ const Login = () => {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeout);
       
-      const response = await fetch(`${url}/api/health`, {
+      const startTime = Date.now();
+      const response = await fetch(`${url}${HEALTH_CHECK_ENDPOINT}`, {
         method: 'GET',
         signal: controller.signal,
         headers: {
@@ -70,6 +81,7 @@ const Login = () => {
           'Pragma': 'no-cache'
         }
       });
+      const responseTime = Date.now() - startTime;
       
       clearTimeout(timeoutId);
       
@@ -77,13 +89,15 @@ const Login = () => {
         return {
           success: true,
           url,
-          status: response.status
+          status: response.status,
+          responseTime
         };
       }
       return {
         success: false,
         url,
-        status: response.status
+        status: response.status,
+        responseTime
       };
     } catch (error) {
       console.warn(`Connection test failed for ${url}:`, error.message);
@@ -96,20 +110,24 @@ const Login = () => {
   };
 
   const handleConnectionFailure = async () => {
-    // Try fallback to local development server
-    const localTest = await testConnection(LOCAL_BACKEND_URL, 5000);
-    if (localTest.success) {
-      setConnectionDetails(`Connected to local server: ${LOCAL_IP}`);
-      api.defaults.baseURL = LOCAL_BACKEND_URL;
-      setCurrentBaseURL(LOCAL_BACKEND_URL);
-      await AsyncStorage.setItem("last_used_api_url", LOCAL_BACKEND_URL);
-      return true;
+    setConnectionDetails("Attempting to reconnect...");
+    
+    // Try local server first if in development
+    if (__DEV__) {
+      const localTest = await testConnection(LOCAL_BACKEND_URL, 5000);
+      if (localTest.success) {
+        setConnectionDetails(`Connected to local server (${localTest.responseTime}ms)`);
+        api.defaults.baseURL = LOCAL_BACKEND_URL;
+        setCurrentBaseURL(LOCAL_BACKEND_URL);
+        await AsyncStorage.setItem("last_used_api_url", LOCAL_BACKEND_URL);
+        return true;
+      }
     }
     
-    // Try fallback to production again in case local failed
+    // Try production server
     const productionTest = await testConnection(PRODUCTION_BACKEND_URL, 10000);
     if (productionTest.success) {
-      setConnectionDetails(`Reconnected to production server`);
+      setConnectionDetails(`Connected to production server (${productionTest.responseTime}ms)`);
       api.defaults.baseURL = PRODUCTION_BACKEND_URL;
       setCurrentBaseURL(PRODUCTION_BACKEND_URL);
       await AsyncStorage.setItem("last_used_api_url", PRODUCTION_BACKEND_URL);
@@ -121,33 +139,21 @@ const Login = () => {
   };
 
   const handleLoginError = (error) => {
-    const errorDetails = {
-      timestamp: new Date().toISOString(),
-      name: error.name,
-      message: error.message,
-      code: error.code,
-      currentBaseURL,
-      connectionDetails,
-      attemptedURLs: [
-        `${currentBaseURL}/api/health`,
-        `${LOCAL_BACKEND_URL}/api/health`
-      ]
-    };
-
-    console.error("Connection error details:", JSON.stringify(errorDetails, null, 2));
-
-    let errorTitle = "Connection Issue";
-    let errorMessage = "";
-    let actions = [];
+    setLoading(false);
+    
+    let errorTitle = "Connection Error";
+    let errorMessage = "An error occurred while trying to connect.";
+    let actions = [{ text: "OK" }];
 
     if (error.message.includes("NO_INTERNET")) {
-      errorMessage = "No internet connection detected. Please check your network settings.";
-      actions = [{ text: "OK" }];
+      errorTitle = "Network Unavailable";
+      errorMessage = "Please check your internet connection and try again.";
     } 
-    else if (error.message.includes("BACKEND_UNREACHABLE")) {
-      errorMessage = `Cannot connect to our servers.\n\nTried:\n• ${currentBaseURL}\n• Local development server`;
+    else if (error.message.includes("timeout")) {
+      errorTitle = "Connection Timeout";
+      errorMessage = `The server took too long to respond. Please try again.\n\nCurrent endpoint: ${currentBaseURL}`;
       actions = [
-        { text: "Try Local Server", onPress: () => {
+        { text: "Try Local", onPress: () => {
           api.defaults.baseURL = LOCAL_BACKEND_URL;
           setCurrentBaseURL(LOCAL_BACKEND_URL);
           handleLogin();
@@ -156,13 +162,16 @@ const Login = () => {
       ];
     }
     else if (error.response) {
-      errorTitle = "Server Error";
-      errorMessage = error.response.data?.message || `Server responded with status ${error.response.status}`;
-      actions = [{ text: "OK" }];
+      errorTitle = "Login Failed";
+      errorMessage = error.response.data?.message || 
+        `Server responded with status ${error.response.status}`;
+      
+      if (error.response.status === 401) {
+        errorMessage = "Invalid email or password. Please try again.";
+      }
     }
     else {
-      errorMessage = "An unexpected error occurred. Please try again.";
-      actions = [{ text: "Retry", onPress: handleLogin }];
+      errorMessage = error.message || "An unexpected error occurred.";
     }
 
     Alert.alert(errorTitle, errorMessage, actions);
@@ -177,19 +186,18 @@ const Login = () => {
 
     setLoading(true);
     setNetworkError(false);
-    setConnectionDetails("Testing connection...");
 
     try {
       // 1. Check basic internet connectivity
-      const internetTest = await testConnection('https://www.google.com', 5000);
-      if (!internetTest.success) {
+      const networkState = await Network.getNetworkStateAsync();
+      if (!networkState.isConnected) {
         throw new Error("NO_INTERNET: No internet connection");
       }
 
       // 2. Test current backend connection
       const backendTest = await testConnection(currentBaseURL);
       if (!backendTest.success) {
-        setConnectionDetails(`Primary server unreachable (${backendTest.status || 'timeout'})`);
+        setConnectionDetails(`Server unreachable (${backendTest.error || 'unknown error'})`);
         
         // 3. Attempt fallback connection
         const fallbackConnected = await handleConnectionFailure();
@@ -197,10 +205,10 @@ const Login = () => {
           throw new Error("BACKEND_UNREACHABLE: All connection attempts failed");
         }
       } else {
-        setConnectionDetails(`Connected to: ${currentBaseURL}`);
+        setConnectionDetails(`Connected (${backendTest.responseTime}ms)`);
       }
 
-      // Proceed with login
+      // 4. Proceed with login
       const response = await api.post(
         "/api/auth/login",
         {
@@ -213,16 +221,18 @@ const Login = () => {
             'X-Connection-Source': 'Mobile-App',
             'X-Base-URL': currentBaseURL
           },
-          timeout: 15000
+          timeout: CONNECTION_TIMEOUT
         }
       );
 
+      // 5. Store auth data
       await AsyncStorage.multiSet([
         ["auth", response.data.token],
         ["user", JSON.stringify(response.data.user || {})],
         ["last_used_api_url", currentBaseURL]
       ]);
 
+      // 6. Navigate to next screen
       router.replace("/(authenticate)/select");
     } catch (error) {
       handleLoginError(error);

@@ -1,84 +1,113 @@
 import axios from "axios";
 import Constants from "expo-constants";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { router } from 'expo-router';
 
-// Fetch API base URL from environment variables
-const API_BASE_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_API_BASE_URL || "https://dating-apps.onrender.com";
+// Base URL from environment or fallback
+const API_BASE_URL =
+  Constants.expoConfig?.extra?.EXPO_PUBLIC_API_BASE_URL ||
+  "https://dating-apps.onrender.com";
 
-console.log("EXPO_PUBLIC_API_BASE_URL:", API_BASE_URL); // Debug log to verify API URL
+console.log("🔗 API Base URL:", API_BASE_URL);
 
-// Create an Axios instance with the base URL
 const api = axios.create({
-  baseURL: API_BASE_URL, // Set base URL dynamically
-  timeout: 10000, // Set a timeout for requests (10 seconds)
+  baseURL: API_BASE_URL,
+  timeout: 10000,
   headers: {
     "Content-Type": "application/json",
   },
 });
 
-// Add request interceptor to attach auth token
+// Request Interceptor
 api.interceptors.request.use(
   async (config) => {
     try {
-      console.log(`Request: ${config.method.toUpperCase()} ${config.baseURL}${config.url}`);
-
-      // Retrieve the auth token from AsyncStorage
       const token = await AsyncStorage.getItem("auth");
-
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
+      } else {
+        console.warn("⚠️ No auth token found.");
       }
-    } catch (error) {
-      console.error("Error retrieving auth token:", error);
+    } catch (err) {
+      console.error("❌ Failed to attach token:", err);
     }
-
     return config;
   },
   (error) => {
-    console.error("Request Error:", error);
+    console.error("❌ Request Error:", error);
     return Promise.reject(error);
   }
 );
 
-// Add response interceptor to handle errors and log responses
+// Response Interceptor
 api.interceptors.response.use(
   (response) => {
-    console.log(`Response: ${response.status} ${response.config.url}`, response.data);
+    console.log(`✅ Response [${response.status}] from ${response.config.url}`);
     return response;
   },
   async (error) => {
-    console.error("Response Error:", error);
-
     if (error.response) {
-      console.error("Error Data:", error.response.data);
-      console.error("Error Status:", error.response.status);
+      const { status, data, config } = error.response;
+      console.error(`❌ Error [${status}] from ${config?.url}`);
+      console.error("🔍 Details:", JSON.stringify(data, null, 2));
 
-      if (error.response.status === 401) {
-        console.error("Unauthorized: Logging out...");
+      if (
+        (status === 401 || status === 403) &&
+        data?.message === "Email not verified"
+      ) {
+        console.warn("📧 Email not verified. Redirecting to /verify.");
+
+        if (data?.userId) {
+          router.replace({
+            pathname: "/(authenticate)/verify",
+            params: { userId: data.userId },
+          });
+        } else {
+          console.error("❗ Missing userId in error response.");
+        }
+      } else if (status === 401) {
+        console.warn("⚠️ Unauthorized. Logging out...");
         await AsyncStorage.removeItem("auth");
+        router.replace("/(authenticate)/login");
+      } else if (status === 403) {
+        console.warn("⛔ Forbidden. You don’t have permission to access this.");
       }
     } else if (error.request) {
-      console.error("No Response Received:", error.request);
+      console.error("📡 No response received:", error.request);
     } else {
-      console.error("Request Setup Error:", error.message);
+      console.error("⚠️ Request setup error:", error.message);
     }
 
     return Promise.reject(error);
   }
 );
 
-// Function to update profile images
+// Utility: Update profile image
 export const updateProfileImage = async (userId, description) => {
   try {
-    console.log(`Sending request to: ${API_BASE_URL}/api/users/${userId}/profile-images`);
-    console.log("Payload:", { description });
-
-    const response = await api.put(`/api/users/${userId}/profile-images`, { description });
-
-    console.log("Response:", response.data);
+    console.log(`📤 PUT /api/users/${userId}/profile-images`, { description });
+    const response = await api.put(`/api/users/${userId}/profile-images`, {
+      description,
+    });
     return response.data;
   } catch (error) {
-    console.error("Error updating profile image:", error.response?.data || error.message);
+    const message = error.response?.data || error.message;
+    console.error("❌ Failed to update profile image:", message);
+    throw error;
+  }
+};
+
+// Utility: Resend verification email
+export const resendVerificationEmail = async (userId) => {
+  try {
+    console.log(`📨 POST /api/resend-verification for user ${userId}`);
+    const response = await api.post(`/api/resend-verification`, { userId });
+    return response.data;
+  } catch (error) {
+    console.error(
+      "❌ Failed to resend verification email:",
+      error.response?.data || error.message
+    );
     throw error;
   }
 };

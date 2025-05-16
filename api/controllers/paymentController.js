@@ -1,8 +1,9 @@
+const axios = require("axios");
 const User = require("../models/user");
 const { fetchAccessToken } = require("../utils/mpesaUtils");
-const axios = require("axios");
 
-// Initiate Payment
+// @desc    Initiate M-Pesa STK Push payment
+// @route   POST /api/payments/pay
 exports.initiatePayment = async (req, res) => {
   try {
     const { phoneNumber, amount } = req.body;
@@ -11,27 +12,29 @@ exports.initiatePayment = async (req, res) => {
       return res.status(400).json({ message: "Phone number and amount are required" });
     }
 
-    // Ensure the phone number format is correct (no '+' sign)
-    const sanitizedPhoneNumber = phoneNumber.replace("+", "");
+    // Sanitize phone number: remove '+' and ensure it's in 2547... format
+    const sanitizedPhoneNumber = phoneNumber.replace(/^\+/, "");
 
-    console.log("Initiating payment for phone number:", sanitizedPhoneNumber);
+    console.log(`Initiating payment for ${sanitizedPhoneNumber} with amount ${amount}`);
 
-    // Fetch a fresh access token
+    // Fetch fresh access token
     const accessToken = await fetchAccessToken();
 
-    const response = await axios.post(
+    const paymentPayload = {
+      BusinessShortCode: process.env.MPESA_PAYBILL,
+      Amount: amount,
+      PartyA: sanitizedPhoneNumber,
+      PartyB: process.env.MPESA_PAYBILL,
+      PhoneNumber: sanitizedPhoneNumber,
+      CallBackURL: `${process.env.SERVER_URL}/api/payments/callback`,
+      AccountReference: process.env.ACCOUNT_NUMBER || "Subscription",
+      TransactionDesc: `Payment to ${process.env.BUSINESS_NAME || "Your Business"}`,
+      TransactionType: "CustomerPayBillOnline",
+    };
+
+    const mpesaResponse = await axios.post(
       "https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest",
-      {
-        BusinessShortCode: process.env.MPESA_PAYBILL,
-        Amount: amount,
-        PartyA: sanitizedPhoneNumber,
-        PartyB: process.env.MPESA_PAYBILL,
-        PhoneNumber: sanitizedPhoneNumber,
-        CallBackURL: `${process.env.SERVER_URL}/api/payments/callback`,
-        AccountReference: process.env.ACCOUNT_NUMBER || "Subscription",
-        TransactionDesc: `Payment to ${process.env.BUSINESS_NAME || "Your Business"}`,
-        TransactionType: "CustomerPayBillOnline",
-      },
+      paymentPayload,
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -40,12 +43,14 @@ exports.initiatePayment = async (req, res) => {
       }
     );
 
-    console.log("Payment initiation successful:", response.data);
+    console.log("Payment initiation response:", mpesaResponse.data);
 
-    return res.status(200).json({ message: "Payment initiated", data: response.data });
+    return res.status(200).json({
+      message: "Payment initiated successfully",
+      data: mpesaResponse.data,
+    });
   } catch (error) {
-    console.error("Payment initiation error:", error);
-
+    console.error("Error initiating payment:", error.message);
     return res.status(500).json({
       message: "Payment initiation failed",
       error: error.message,
@@ -54,57 +59,84 @@ exports.initiatePayment = async (req, res) => {
   }
 };
 
-// Handle Callback
+// @desc    Handle M-Pesa callback from Safaricom
+// @route   POST /api/payments/callback
 exports.handleCallback = async (req, res) => {
   try {
     const { Body } = req.body;
 
-    if (!Body || !Body.stkCallback) {
-      return res.status(400).json({ message: "Invalid callback data" });
+    if (!Body?.stkCallback) {
+      return res.status(400).json({ message: "Invalid callback format" });
     }
 
-    const { ResultCode, CallbackMetadata } = Body.stkCallback;
+    const { stkCallback } = Body;
+    const { ResultCode, CallbackMetadata } = stkCallback;
 
     if (ResultCode === 0 && CallbackMetadata) {
-      const phoneNumber = CallbackMetadata.Item.find((item) => item.Name === "PhoneNumber").Value;
+      const items = CallbackMetadata.Item || [];
+      const phoneItem = items.find(item => item.Name === "PhoneNumber");
 
-      console.log("Payment successful for phone number:", phoneNumber);
+      if (!phoneItem?.Value) {
+        console.log("PhoneNumber not found in metadata");
+        return res.status(400).json({ message: "PhoneNumber missing in callback" });
+      }
 
+      const phoneNumber = phoneItem.Value.toString();
+      console.log("Payment confirmed for phone number:", phoneNumber);
+
+      // Update user subscription status
       const user = await User.findOne({ phoneNumber });
       if (user) {
         user.isSubscribed = true;
-        user.subscriptionExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours from now
+        user.subscriptionExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // Add 24 hours
         await user.save();
+        console.log("User subscription updated for:", phoneNumber);
+      } else {
+        console.warn("User not found for phone number:", phoneNumber);
       }
     } else {
-      console.log("Payment failed with ResultCode:", ResultCode);
+      console.log("M-Pesa STK Push failed. ResultCode:", ResultCode);
     }
 
-    return res.status(200).json({ message: "Callback handled successfully" });
+    return res.status(200).json({ message: "Callback processed successfully" });
   } catch (error) {
-    console.error("Callback handling error:", error);
-    return res.status(500).json({ message: "Callback handling failed", error: error.message });
+    console.error("Error handling callback:", error.message);
+    return res.status(500).json({ message: "Callback processing failed", error: error.message });
   }
 };
 
-// Validate M-Pesa Payment
+// @desc    Validate incoming M-Pesa request (Validation URL)
+// @route   POST /api/payments/validate
 exports.validateMpesaRequest = (req, res) => {
   try {
-    console.log("Validation request received:", req.body);
-    return res.status(200).json({ ResultCode: 0, ResultDesc: "Accepted" });
+    console.log("M-Pesa validation request received:", req.body);
+    return res.status(200).json({
+      ResultCode: 0,
+      ResultDesc: "Accepted",
+    });
   } catch (error) {
-    console.error("Validation error:", error);
-    return res.status(500).json({ ResultCode: 1, ResultDesc: "Validation failed" });
+    console.error("Validation error:", error.message);
+    return res.status(500).json({
+      ResultCode: 1,
+      ResultDesc: "Validation failed",
+    });
   }
 };
 
-// Confirm M-Pesa Payment
+// @desc    Confirm incoming M-Pesa payment (Confirmation URL)
+// @route   POST /api/payments/confirm
 exports.confirmPayment = (req, res) => {
   try {
-    console.log("Confirmation request received:", req.body);
-    return res.status(200).json({ ResultCode: 0, ResultDesc: "Confirmed" });
+    console.log("M-Pesa confirmation request received:", req.body);
+    return res.status(200).json({
+      ResultCode: 0,
+      ResultDesc: "Confirmed",
+    });
   } catch (error) {
-    console.error("Confirmation error:", error);
-    return res.status(500).json({ ResultCode: 1, ResultDesc: "Confirmation failed" });
+    console.error("Confirmation error:", error.message);
+    return res.status(500).json({
+      ResultCode: 1,
+      ResultDesc: "Confirmation failed",
+    });
   }
 };
