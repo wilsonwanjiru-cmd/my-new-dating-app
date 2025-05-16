@@ -14,7 +14,7 @@ import axios from "axios";
 import * as Animatable from "react-native-animatable";
 
 // Use the environment variable for the backend URL
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://dating-apps.onrender.com";
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://api.rudadatingsite.singles/";
 
 const Profile = ({ item, isEven, userId, setProfiles }) => {
   const [liked, setLiked] = useState(false); // State to track if the profile is liked

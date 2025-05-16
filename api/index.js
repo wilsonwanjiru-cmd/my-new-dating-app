@@ -11,41 +11,28 @@ const process = require("process");
 dotenv.config();
 
 // Constants
-const PRODUCTION_URL = 'https://ruda-backend.onrender.com';
+const PRODUCTION_URL = 'https://api.rudadatingsite.singles/';
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const PORT = process.env.PORT || 5000;
+const HOST = process.env.HOST || '0.0.0.0';
 
-// Import routes
-const authRoutes = require("./routes/authRoutes");
-const chatRoutes = require("./routes/chatRoutes");
-const emailRoutes = require("./routes/emailRoutes");
-const matchRoutes = require("./routes/matchRoutes");
-const messageRoutes = require("./routes/messageRoutes");
-const userRoutes = require("./routes/userRoutes");
-const paymentRoutes = require("./routes/paymentRoutes");
-const photoRoutes = require("./routes/photoRoutes");
-const healthRoutes = require('./routes/healthRoutes');
-
-// Import database connection
-const connectDB = require("./config/db");
-
-// Initialize app
+// Initialize Express and HTTP Server
 const app = express();
 const server = http.createServer(app);
 
-// ========== CORS CONFIGURATION ========== //
+// ========== CORS CONFIGURATION ==========
 const allowedOrigins = [
   'http://localhost:19006',
   'exp://192.168.249.233:8081',
   'http://192.168.249.233:8081',
   'http://localhost:5000',
   PRODUCTION_URL,
-  'https://api.rudadatingsite.singles/'
+  'https://api.rudadatingsite.singles/',
 ];
 
 const corsOptions = {
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.some(allowedOrigin => origin.startsWith(allowedOrigin))) {
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.some(o => origin.startsWith(o))) {
       callback(null, true);
     } else {
       console.warn(`⚠️ Blocked by CORS: ${origin}`);
@@ -59,9 +46,8 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// ========== FORCE HTTPS IN PRODUCTION ========== //
-app.set('trust proxy', 1); // Trust proxy headers from Render
-
+// ========== FORCE HTTPS IN PRODUCTION ==========
+app.set('trust proxy', 1);
 if (IS_PRODUCTION) {
   app.use((req, res, next) => {
     if (req.headers['x-forwarded-proto'] !== 'https') {
@@ -71,17 +57,17 @@ if (IS_PRODUCTION) {
   });
 }
 
-// ========== MIDDLEWARE ========== //
+// ========== MIDDLEWARE ==========
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Request logging
+// Logging middleware
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
   next();
 });
 
-// Security headers
+// Basic security headers
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -92,7 +78,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// Connect to MongoDB
+// ========== DATABASE ==========
+const connectDB = require("./config/db");
 connectDB();
 
 mongoose.connection.on("connected", () => {
@@ -100,22 +87,25 @@ mongoose.connection.on("connected", () => {
 });
 
 mongoose.connection.on("error", (err) => {
-  console.error("❌ MongoDB error:", err.message);
+  console.error("❌ MongoDB connection error:", err.message);
   process.exit(1);
 });
 
-// ========== ROUTES ========== //
-// Debug route
-app.get('/api/debug-test', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development'
-  });
-});
+// ========== ROUTES ==========
+const authRoutes = require("./routes/authRoutes");
+const chatRoutes = require("./routes/chatRoutes");
+const emailRoutes = require("./routes/emailRoutes");
+const matchRoutes = require("./routes/matchRoutes");
+const messageRoutes = require("./routes/messageRoutes");
+const userRoutes = require("./routes/userRoutes");
+const paymentRoutes = require("./routes/paymentRoutes");
+const photoRoutes = require("./routes/photoRoutes");
+const healthRoutes = require("./routes/healthRoutes");
 
-// API Routes - Health routes first
-app.use('/api', healthRoutes);
+// Health check route first
+app.use("/api", healthRoutes);
+
+// Main API routes
 app.use("/api/auth", authRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/email", emailRoutes);
@@ -126,7 +116,7 @@ app.use("/api/payments", paymentRoutes);
 app.use("/api/photos", photoRoutes);
 
 // System info endpoint
-app.get('/api/system-info', (req, res) => {
+app.get("/api/system-info", (req, res) => {
   res.json({
     status: 'operational',
     timestamp: new Date().toISOString(),
@@ -144,22 +134,28 @@ app.get('/api/system-info', (req, res) => {
   });
 });
 
-// Registered routes for documentation
-const registeredRoutes = [
-  { path: '/api/health', methods: ['GET'] },
-  { path: '/api/auth', methods: ['POST'] },
-  { path: '/api/chat', methods: ['GET', 'POST'] },
-  { path: '/api/debug-test', methods: ['GET'] },
-  { path: '/api/system-info', methods: ['GET'] }
-];
+// Debug test route
+app.get("/api/debug-test", (req, res) => {
+  res.json({
+    status: 'ok',
+    environment: process.env.NODE_ENV || 'development',
+    timestamp: new Date().toISOString()
+  });
+});
 
-// Default route
+// API overview route
 app.get("/", (req, res) => {
   res.json({
     message: "Ruda Dating App API",
-    status: 'healthy',
-    endpoints: registeredRoutes,
-    timestamp: new Date().toISOString()
+    status: "healthy",
+    timestamp: new Date().toISOString(),
+    endpoints: [
+      { path: '/api/health', methods: ['GET'] },
+      { path: '/api/auth', methods: ['POST'] },
+      { path: '/api/chat', methods: ['GET', 'POST'] },
+      { path: '/api/debug-test', methods: ['GET'] },
+      { path: '/api/system-info', methods: ['GET'] }
+    ]
   });
 });
 
@@ -168,21 +164,20 @@ app.use((req, res) => {
   res.status(404).json({
     message: "Endpoint not found",
     requestedUrl: req.originalUrl,
-    availableEndpoints: registeredRoutes,
     help: "Try GET /api/health or GET /api/debug-test"
   });
 });
 
-// Error handler
+// Error Handler
 app.use((err, req, res, next) => {
-  console.error("Error:", err.message);
+  console.error("Unhandled Error:", err.message);
   res.status(err.status || 500).json({
     error: err.message,
     timestamp: new Date().toISOString()
   });
 });
 
-// ========== SOCKET.IO ========== //
+// ========== SOCKET.IO ==========
 const io = new Server(server, {
   cors: {
     origin: allowedOrigins,
@@ -196,7 +191,7 @@ const io = new Server(server, {
 });
 
 io.on("connection", (socket) => {
-  console.log(`Socket connected: ${socket.id}`);
+  console.log(`🔌 Socket connected: ${socket.id}`);
 
   socket.on("sendMessage", async (data) => {
     try {
@@ -208,36 +203,33 @@ io.on("connection", (socket) => {
       const savedMessage = await newMessage.save();
       io.to(data.receiverId).emit("receiveMessage", savedMessage);
     } catch (error) {
-      console.error("Socket error:", error);
+      console.error("Socket Error:", error);
     }
   });
 
   socket.on("disconnect", () => {
-    console.log(`Socket disconnected: ${socket.id}`);
+    console.log(`⚡ Socket disconnected: ${socket.id}`);
   });
 });
 
-// ========== SERVER STARTUP ========== //
-const PORT = process.env.PORT || 5000;
-const HOST = process.env.HOST || '0.0.0.0';
-
+// ========== START SERVER ==========
 server.listen(PORT, HOST, () => {
   console.log(`
-  🚀 Server running on http://${HOST}:${PORT}
+  🚀 Server running at http://${HOST}:${PORT}
   Environment: ${process.env.NODE_ENV || 'development'}
-  Database: ${mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'}
+  MongoDB: ${mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'}
   `);
 });
 
-// Graceful shutdown
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+// ========== GRACEFUL SHUTDOWN ==========
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
 
 function shutdown() {
-  console.log('Shutting down gracefully...');
+  console.log("🛑 Shutting down gracefully...");
   server.close(() => {
     mongoose.connection.close(false, () => {
-      console.log('Server stopped');
+      console.log("✅ Server and MongoDB connection closed.");
       process.exit(0);
     });
   });

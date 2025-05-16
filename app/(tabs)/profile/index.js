@@ -8,7 +8,7 @@ import axios from "axios"; // For making HTTP requests
 import Profile from "../../../components/Profile"; // Custom Profile component
 
 // Use the environment variable for the backend URL
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://dating-apps.onrender.com";
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://api.rudadatingsite.singles/";
 
 const Index = () => {
   const [userId, setUserId] = useState(""); // State to store the user ID

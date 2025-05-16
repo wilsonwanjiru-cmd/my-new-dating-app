@@ -17,7 +17,7 @@ export default function Verify() {
 
   const resendVerification = async () => {
     try {
-      const response = await axios.post(`https://dating-apps.onrender.com/api/auth/resend`, { userId });
+      const response = await axios.post(`https://api.rudadatingsite.singles/api/auth/resend`, { userId });
       Alert.alert("Success", "Verification email has been resent.");
     } catch (error) {
       console.error("Resend error:", error.response?.data || error.message);

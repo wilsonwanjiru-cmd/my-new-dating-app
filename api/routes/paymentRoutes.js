@@ -8,26 +8,31 @@ const {
 
 const router = express.Router();
 
-// Middleware for logging incoming requests
+// Middleware to log requests for debugging and monitoring
 const logRoute = (label) => (req, res, next) => {
-  console.log(`${label} Endpoint Hit at ${new Date().toISOString()}`);
+  console.log(`[${new Date().toISOString()}] ${label} endpoint hit`);
   next();
 };
 
-// Route to initiate payment
+// @route   POST /api/payments/pay
+// @desc    Initiate STK Push payment request
 router.post("/pay", logRoute("Initiate Payment"), initiatePayment);
 
-// Route to handle M-Pesa callback
+// @route   POST /api/payments/callback
+// @desc    Handle asynchronous callback from Safaricom
 router.post("/callback", logRoute("Callback"), handleCallback);
 
-// Route to validate M-Pesa payment request
+// @route   POST /api/payments/validate
+// @desc    Validate incoming M-Pesa payment request
 router.post("/validate", logRoute("Validation"), validateMpesaRequest);
 
-// Route to confirm M-Pesa payment
+// @route   POST /api/payments/confirm
+// @desc    Confirm completed M-Pesa payment
 router.post("/confirm", logRoute("Confirmation"), confirmPayment);
 
-// 404 handler for unmatched routes
-router.use((req, res) => {
+// Handle unmatched payment routes
+router.use("*", (req, res) => {
+  console.warn(`[${new Date().toISOString()}] Unknown payment route: ${req.originalUrl}`);
   res.status(404).json({ message: "Payment endpoint not found" });
 });
 

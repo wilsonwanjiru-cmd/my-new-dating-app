@@ -2,9 +2,9 @@ const axios = require("axios");
 const User = require("../models/user");
 const { fetchAccessToken } = require("../utils/mpesaUtils");
 
-// @desc    Initiate M-Pesa STK Push payment
-// @route   POST /api/payments/pay
-exports.initiatePayment = async (req, res) => {
+// @desc    Initiate M-Pesa STK Push payment (alias for /stk-push)
+// @route   POST /api/payments/stk-push
+exports.initiateStkPush = async (req, res) => {
   try {
     const { phoneNumber, amount } = req.body;
 
@@ -12,12 +12,10 @@ exports.initiatePayment = async (req, res) => {
       return res.status(400).json({ message: "Phone number and amount are required" });
     }
 
-    // Sanitize phone number: remove '+' and ensure it's in 2547... format
     const sanitizedPhoneNumber = phoneNumber.replace(/^\+/, "");
 
-    console.log(`Initiating payment for ${sanitizedPhoneNumber} with amount ${amount}`);
+    console.log(`STK Push initiated for ${sanitizedPhoneNumber} with amount ${amount}`);
 
-    // Fetch fresh access token
     const accessToken = await fetchAccessToken();
 
     const paymentPayload = {
@@ -43,16 +41,16 @@ exports.initiatePayment = async (req, res) => {
       }
     );
 
-    console.log("Payment initiation response:", mpesaResponse.data);
+    console.log("STK Push Response:", mpesaResponse.data);
 
     return res.status(200).json({
-      message: "Payment initiated successfully",
+      message: "STK Push initiated successfully",
       data: mpesaResponse.data,
     });
   } catch (error) {
-    console.error("Error initiating payment:", error.message);
+    console.error("STK Push error:", error.message);
     return res.status(500).json({
-      message: "Payment initiation failed",
+      message: "STK Push failed",
       error: error.message,
       details: error.response?.data || null,
     });
@@ -84,11 +82,10 @@ exports.handleCallback = async (req, res) => {
       const phoneNumber = phoneItem.Value.toString();
       console.log("Payment confirmed for phone number:", phoneNumber);
 
-      // Update user subscription status
       const user = await User.findOne({ phoneNumber });
       if (user) {
         user.isSubscribed = true;
-        user.subscriptionExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // Add 24 hours
+        user.subscriptionExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
         await user.save();
         console.log("User subscription updated for:", phoneNumber);
       } else {
@@ -140,3 +137,8 @@ exports.confirmPayment = (req, res) => {
     });
   }
 };
+
+// Optional: Alias for initiateStkPush
+// @desc    Initiate payment via /pay
+// @route   POST /api/payments/pay
+exports.initiatePayment = exports.initiateStkPush;

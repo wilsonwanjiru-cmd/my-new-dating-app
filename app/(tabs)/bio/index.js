@@ -20,7 +20,7 @@ import { jwtDecode } from "jwt-decode";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // Use the environment variable for the backend URL
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://dating-apps.onrender.com";
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://api.rudadatingsite.singles/";
 
 const BioScreen = () => {
   const [option, setOption] = useState("AD");
