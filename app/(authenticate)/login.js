@@ -29,7 +29,7 @@ const Login = () => {
   const router = useRouter();
 
   // Configuration
-  const LOCAL_IP = "192.168.232.233";
+  const LOCAL_IP = "192.168.89.233";
   const LOCAL_BACKEND_URL = `http://${LOCAL_IP}:5000`;
   const PRODUCTION_BACKEND_URL = "https://api.rudadatingsite.singles/";
   const CONNECTION_TIMEOUT = 15000;
