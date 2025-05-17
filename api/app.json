@@ -1,0 +1,14 @@
+{
+  "expo": {
+    "name": "api",
+    "slug": "api",
+    "version": "1.0.0",
+    "description": "Backend for My New Dating App",
+    "sdkVersion": "53.0.0",
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ]
+  }
+}

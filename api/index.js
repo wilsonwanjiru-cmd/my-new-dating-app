@@ -11,6 +11,7 @@ const path = require('path');
 const fs = require('fs');
 const morgan = require('morgan');
 const rfs = require('rotating-file-stream');
+const { initializeTransporter } = require('./controllers/emailController');
 
 // Initialize Express app
 const app = express();
@@ -20,7 +21,7 @@ const server = http.createServer(app);
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const PORT = process.env.PORT || 5000;
 const HOST = process.env.HOST || '0.0.0.0';
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:8081';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 const BACKEND_URL = process.env.BACKEND_URL || `http://${HOST}:${PORT}`;
 
 // ==================== Logging Configuration ====================
@@ -60,10 +61,10 @@ app.use('/api', apiLimiter);
 const allowedOrigins = [
   FRONTEND_URL,
   BACKEND_URL,
-  'http://localhost:8081',
+  'http://localhost:3000',
   'http://localhost:19006',
-  'exp://192.168.249.233:8081',
-  'http://192.168.249.233:8081',
+  'exp://192.168.249.233:3000',
+  'http://192.168.249.233:3000',
   'http://localhost:5000',
   'https://rudadatingsite.singles',
   'https://api.rudadatingsite.singles'
@@ -118,6 +119,22 @@ mongoose.connection.on('error', (err) => {
 mongoose.connection.on('disconnected', () => {
   console.warn('⚠️ MongoDB disconnected');
 });
+
+// ==================== Initialize Services ====================
+const initializeServices = async () => {
+  try {
+    // Initialize Email Transporter
+    await initializeTransporter();
+    console.log('✉️ Email transporter initialized');
+    
+    // Add other service initializations here if needed
+    
+    return true;
+  } catch (err) {
+    console.error('❌ Service initialization failed:', err);
+    throw err;
+  }
+};
 
 // ==================== Route Imports ====================
 const authRoutes = require('./routes/authRoutes');
@@ -187,7 +204,7 @@ app.get('/', (req, res) => {
       : `${BACKEND_URL}/api-docs`,
     endpoints: [
       { path: '/api/health', methods: ['GET'], description: 'Health check' },
-      { path: '/api/auth', methods: ['POST'], description: 'Authentication' },
+      { path: '/api/auth', methods: ['POST', 'GET'], description: 'Authentication' },
       { path: '/api/users', methods: ['GET', 'PUT', 'DELETE'], description: 'User management' },
       { path: '/api/system-info', methods: ['GET'], description: 'System information' }
     ]
@@ -273,14 +290,25 @@ io.on('connection', (socket) => {
 });
 
 // ==================== Server Startup ====================
-server.listen(PORT, HOST, () => {
-  console.log(`
-  🚀 Server running at ${BACKEND_URL}
-  Environment: ${process.env.NODE_ENV || 'development'}
-  MongoDB: ${mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'}
-  Process ID: ${process.pid}
-  `);
-});
+const startServer = async () => {
+  try {
+    await initializeServices();
+    
+    server.listen(PORT, HOST, () => {
+      console.log(`
+      🚀 Server running at ${BACKEND_URL}
+      Environment: ${process.env.NODE_ENV || 'development'}
+      MongoDB: ${mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'}
+      Process ID: ${process.pid}
+      `);
+    });
+  } catch (err) {
+    console.error('❌ Server startup failed:', err);
+    process.exit(1);
+  }
+};
+
+startServer();
 
 // ==================== Graceful Shutdown ====================
 const shutdown = (signal) => {
