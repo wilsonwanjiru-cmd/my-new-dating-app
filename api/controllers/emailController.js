@@ -3,29 +3,25 @@ const crypto = require("crypto");
 const User = require("../models/user");
 require("dotenv").config();
 
-// Enhanced configuration with environment variables
+// Configuration
 const config = {
   baseUrl: process.env.BACKEND_URL || "http://localhost:5000",
   frontendUrl: process.env.FRONTEND_URL || "http://localhost:3000",
   verificationPath: "/verify-email",
 
   email: {
-    service: process.env.SMTP_SERVICE || "",
-    host: process.env.SMTP_HOST || "smtp.zoho.com",
-    port: parseInt(process.env.SMTP_PORT) || 465,
-    secure: process.env.SMTP_SECURE !== "false",
+    host: process.env.EMAIL_SERVICE, // e.g. smtp.zoho.com
+    port: Number(process.env.EMAIL_PORT) || 465,
+    secure: process.env.EMAIL_SECURE === "true", // must be string comparison
     auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASSWORD,
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
     },
-    from: process.env.SMTP_FROM || `Ruda Dating <${process.env.SMTP_USER}>`,
-    tls: {
-      rejectUnauthorized: process.env.NODE_ENV === "production",
-    },
+    from: process.env.EMAIL_FROM || `Ruda Dating <${process.env.EMAIL_USER}>`,
   },
 
   token: {
-    expiry: 24 * 60 * 60 * 1000, // 24 hours
+    expiry: 24 * 60 * 60 * 1000,
     length: 32,
   }
 };
@@ -33,50 +29,36 @@ const config = {
 let transporter;
 
 /**
- * Initialize email transporter with proper configuration
+ * Initialize email transporter with debug verification
  */
 const initializeTransporter = async () => {
   try {
-    const transportConfig = {
-      service: config.email.service,
+    transporter = nodemailer.createTransport({
       host: config.email.host,
       port: config.email.port,
       secure: config.email.secure,
       auth: config.email.auth,
-      tls: config.email.tls,
-    };
+    });
 
-    // Clean undefined values
-    Object.keys(transportConfig).forEach(
-      (key) => transportConfig[key] === undefined && delete transportConfig[key]
-    );
-
-    transporter = nodemailer.createTransport(transportConfig);
-
-    if (process.env.NODE_ENV === "production") {
-      await transporter.verify();
-      console.log("✅ Production SMTP Connection Verified");
-    } else {
-      console.log("ℹ️ SMTP Transporter initialized (dev mode)");
-    }
+    transporter.verify((error, success) => {
+      if (error) {
+        console.error("❌ Email Transporter verification failed:", error);
+      } else {
+        console.log("✅ Email Transporter is ready to send messages");
+      }
+    });
 
     return transporter;
   } catch (error) {
-    console.error("❌ Transporter Initialization Failed:", error);
-    throw new Error("Failed to initialize email transporter");
+    console.error("❌ Failed to initialize transporter:", error);
+    throw new Error("Transporter initialization error");
   }
 };
 
-/**
- * Generate a secure verification token
- */
 const generateVerificationToken = () => {
   return crypto.randomBytes(config.token.length).toString("hex");
 };
 
-/**
- * Email templates with proper HTML and text versions
- */
 const templates = {
   verification: (link, expiryDate, user) => ({
     subject: "Verify Your Ruda Dating Account",
@@ -119,37 +101,21 @@ const templates = {
   }),
 };
 
-/**
- * Send verification email to user
- */
 const sendVerificationEmail = async (email, verificationToken) => {
   if (!transporter) {
-    try {
-      await initializeTransporter();
-      if (!transporter) throw new Error("Transporter initialization failed");
-    } catch (error) {
-      console.error("Email service unavailable:", error);
-      throw new Error("Email service temporarily unavailable");
-    }
+    await initializeTransporter();
+    if (!transporter) throw new Error("Email transporter failed to initialize");
   }
 
   try {
     const user = await User.findOne({ email }).select("name email verified verificationToken");
-    if (!user) {
-      throw new Error("User not found");
-    }
+    if (!user) throw new Error("User not found");
+    if (user.verified) throw new Error("Email already verified");
 
-    if (user.verified) {
-      throw new Error("Email already verified");
-    }
-
-    // Use provided token or generate new one
     const token = verificationToken || generateVerificationToken();
-    // Updated verification link to use /api/email instead of /api/auth
     const verificationLink = `${config.baseUrl}/api/email/verify-email?token=${token}&email=${encodeURIComponent(email)}`;
     const expiryDate = new Date(Date.now() + config.token.expiry).toLocaleString();
 
-    // Update user's verification token if needed
     if (!user.verificationToken || user.verificationToken !== token) {
       user.verificationToken = token;
       await user.save();
@@ -166,7 +132,7 @@ const sendVerificationEmail = async (email, verificationToken) => {
     };
 
     const info = await transporter.sendMail(mailOptions);
-    console.log(`✉️ Verification email sent to ${email}`, info.messageId);
+    console.log(`✉️ Verification email sent to ${email} (ID: ${info.messageId})`);
 
     return {
       success: true,
@@ -174,15 +140,12 @@ const sendVerificationEmail = async (email, verificationToken) => {
       verificationLink,
       expiry: expiryDate,
     };
-  } catch (error) {
-    console.error(`❌ Failed to send verification email to ${email}:`, error);
-    throw error;
+  } catch (err) {
+    console.error(`❌ Could not send verification email to ${email}:`, err);
+    throw err;
   }
 };
 
-/**
- * Verify user's email using token
- */
 const verifyEmail = async (req, res) => {
   try {
     const { token, email } = req.query;
@@ -248,9 +211,6 @@ const verifyEmail = async (req, res) => {
   }
 };
 
-/**
- * Resend verification email
- */
 const resendVerificationEmail = async (req, res) => {
   try {
     const { email } = req.body;
@@ -293,23 +253,19 @@ const resendVerificationEmail = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: "Verification email resent successfully",
-      email: user.email,
     });
   } catch (error) {
     console.error("Failed to resend verification email:", error);
     return res.status(500).json({
       success: false,
-      message: "Failed to resend verification email",
+      message: "Unable to resend verification email",
       code: "SERVER_ERROR",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
 
 module.exports = {
-  initializeTransporter,
   sendVerificationEmail,
   verifyEmail,
   resendVerificationEmail,
-  generateVerificationToken
 };
