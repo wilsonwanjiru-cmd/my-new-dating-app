@@ -34,7 +34,6 @@ let transporter;
 
 /**
  * Initialize email transporter with proper configuration
- * @returns {Promise<nodemailer.Transporter>}
  */
 const initializeTransporter = async () => {
   try {
@@ -54,7 +53,6 @@ const initializeTransporter = async () => {
 
     transporter = nodemailer.createTransport(transportConfig);
 
-    // Verify connection in production
     if (process.env.NODE_ENV === "production") {
       await transporter.verify();
       console.log("✅ Production SMTP Connection Verified");
@@ -71,7 +69,6 @@ const initializeTransporter = async () => {
 
 /**
  * Generate a secure verification token
- * @returns {string} Random hex token
  */
 const generateVerificationToken = () => {
   return crypto.randomBytes(config.token.length).toString("hex");
@@ -124,9 +121,6 @@ const templates = {
 
 /**
  * Send verification email to user
- * @param {string} email - User's email address
- * @param {string} [verificationToken] - Optional existing token
- * @returns {Promise<object>} Result object
  */
 const sendVerificationEmail = async (email, verificationToken) => {
   if (!transporter) {
@@ -151,7 +145,8 @@ const sendVerificationEmail = async (email, verificationToken) => {
 
     // Use provided token or generate new one
     const token = verificationToken || generateVerificationToken();
-    const verificationLink = `${config.baseUrl}/api/auth/verify-email?token=${token}&email=${encodeURIComponent(email)}`;
+    // Updated verification link to use /api/email instead of /api/auth
+    const verificationLink = `${config.baseUrl}/api/email/verify-email?token=${token}&email=${encodeURIComponent(email)}`;
     const expiryDate = new Date(Date.now() + config.token.expiry).toLocaleString();
 
     // Update user's verification token if needed
@@ -187,14 +182,11 @@ const sendVerificationEmail = async (email, verificationToken) => {
 
 /**
  * Verify user's email using token
- * @param {object} req - Express request object
- * @param {object} res - Express response object
  */
 const verifyEmail = async (req, res) => {
   try {
     const { token, email } = req.query;
 
-    // Validate required parameters
     if (!token || !email) {
       return res.status(400).json({
         success: false,
@@ -218,23 +210,19 @@ const verifyEmail = async (req, res) => {
       });
     }
 
-    // Check if already verified
     if (user.verified) {
       return res.status(400).json({
         success: false,
         message: "Email already verified",
         code: "ALREADY_VERIFIED",
-        verifiedAt: user.verifiedAt,
       });
     }
 
-    // Verify the user
     user.verified = true;
     user.verificationToken = undefined;
     user.verifiedAt = new Date();
     await user.save();
 
-    // Prepare response
     const response = {
       success: true,
       message: "Email verified successfully",
@@ -242,14 +230,12 @@ const verifyEmail = async (req, res) => {
       userId: user._id,
     };
 
-    // In production, redirect to frontend
     if (process.env.NODE_ENV === "production") {
       return res.redirect(
         `${config.frontendUrl}/verified?success=true&email=${encodeURIComponent(user.email)}`
       );
     }
 
-    // In development, return JSON response
     return res.status(200).json(response);
   } catch (error) {
     console.error("Email verification failed:", error);
@@ -264,8 +250,6 @@ const verifyEmail = async (req, res) => {
 
 /**
  * Resend verification email
- * @param {object} req - Express request object
- * @param {object} res - Express response object
  */
 const resendVerificationEmail = async (req, res) => {
   try {
@@ -299,13 +283,11 @@ const resendVerificationEmail = async (req, res) => {
       });
     }
 
-    // Generate new token if none exists
     if (!user.verificationToken) {
       user.verificationToken = generateVerificationToken();
       await user.save();
     }
 
-    // Send verification email
     await sendVerificationEmail(user.email, user.verificationToken);
 
     return res.status(200).json({
