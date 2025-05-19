@@ -5,27 +5,29 @@ const crypto = require('crypto');
 const { promisify } = require('util');
 const sleep = promisify(setTimeout);
 
-// Enhanced configuration
+// Enhanced configuration with Zoho defaults
 const config = {
   testEmail: process.env.TEST_EMAIL || process.env.SMTP_USER,
-  timeout: 30000,
+  timeout: 60000, // Increased timeout for Zoho
   retries: 3,
-  retryDelay: 5000
+  retryDelay: 5000,
+  zohoHost: 'smtp.zoho.com',
+  zohoPort: 465
 };
 
-// Diagnostic logging
-console.log('🔍 SMTP Connection Tester');
-console.log('-------------------------');
+// Enhanced diagnostic logging
+console.log('🔍 Zoho SMTP Connection Tester');
+console.log('--------------------------------');
 console.log('Environment:', process.env.NODE_ENV || 'development');
 console.log('Testing Timeout:', config.timeout + 'ms');
 console.log('Max Retries:', config.retries);
 console.log('\n📌 SMTP Configuration:');
-console.log('Host:', process.env.SMTP_HOST || 'smtp.zoho.com');
-console.log('Port:', process.env.SMTP_PORT || 465);
-console.log('Secure:', process.env.SMTP_SECURE !== "false");
+console.log('Host:', process.env.SMTP_HOST || config.zohoHost);
+console.log('Port:', process.env.SMTP_PORT || config.zohoPort);
+console.log('Secure: true (forced for Zoho)');
 console.log('Username:', process.env.SMTP_USER);
 console.log('Password:', process.env.SMTP_PASSWORD ? '********' : 'MISSING');
-console.log('From:', process.env.SMTP_FROM || `Test <${process.env.SMTP_USER}>`);
+console.log('From:', process.env.SMTP_FROM || `Ruda Dating <${process.env.SMTP_USER}>`);
 console.log('Test Email:', config.testEmail);
 
 if (!process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {
@@ -33,75 +35,105 @@ if (!process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {
   process.exit(1);
 }
 
-// Enhanced transporter configuration
+// Zoho-optimized transporter configuration
 const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || 'smtp.zoho.com',
-  port: parseInt(process.env.SMTP_PORT) || 465,
-  secure: process.env.SMTP_SECURE !== "false", // Default true
+  host: process.env.SMTP_HOST || config.zohoHost,
+  port: parseInt(process.env.SMTP_PORT) || config.zohoPort,
+  secure: true, // MUST be true for Zoho
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASSWORD
   },
   tls: {
+    servername: 'smtp.zoho.com', // Critical for Zoho
     minVersion: 'TLSv1.2',
     ciphers: 'HIGH:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!SRP:!CAMELLIA',
-    rejectUnauthorized: false // For testing only
+    rejectUnauthorized: false // Temporary for debugging
   },
+  // Zoho-specific settings
+  requireTLS: true,
+  secureConnection: true,
+  pool: false, // Disable pooling for testing
+  // Timeout settings
   connectionTimeout: config.timeout,
   greetingTimeout: config.timeout,
   socketTimeout: config.timeout,
+  // Debugging
   logger: true,
-  debug: true
+  debug: true,
+  // Additional Zoho headers
+  name: 'ruda-dating-app' // Identifies your app to Zoho
 });
 
-// Enhanced test email content
+// Enhanced test email with Zoho-specific headers
 const testMessage = {
-  from: process.env.SMTP_FROM || `Test <${process.env.SMTP_USER}>`,
+  from: process.env.SMTP_FROM || `Ruda Dating <${process.env.SMTP_USER}>`,
   to: config.testEmail,
-  subject: 'SMTP Connection Test',
-  text: `This is a test email sent at ${new Date().toISOString()}\n\nTest ID: ${crypto.randomBytes(8).toString('hex')}`,
+  subject: 'SMTP Connection Test - Ruda Dating',
+  text: `This is a test email from Ruda Dating sent at ${new Date().toISOString()}\n\nTest ID: ${crypto.randomBytes(8).toString('hex')}`,
   html: `<html>
-    <body>
-      <h2>SMTP Connection Test</h2>
+    <body style="font-family: Arial, sans-serif;">
+      <h2 style="color: #4f46e5;">Ruda Dating SMTP Test</h2>
       <p>This is a test email sent at ${new Date().toISOString()}</p>
-      <p><strong>Test ID:</strong> ${crypto.randomBytes(8).toString('hex')}</p>
+      <p><strong>Test ID:</strong> <code>${crypto.randomBytes(8).toString('hex')}</code></p>
       <hr>
-      <p>If you received this, your SMTP configuration is working correctly.</p>
+      <p>If you received this, your Zoho SMTP configuration is working correctly.</p>
     </body>
   </html>`,
   headers: {
+    'X-Mailer': 'Ruda Dating App',
+    'X-Priority': '1',
     'X-Test-ID': crypto.randomBytes(8).toString('hex'),
-    'X-Test-Date': new Date().toISOString()
-  }
+    'X-Test-Date': new Date().toISOString(),
+    'X-Zoho-Version': '1.0'
+  },
+  priority: 'high'
 };
 
-// Enhanced connection tester with retries
+// Enhanced connection tester with Zoho-specific checks
 async function testConnection(attempt = 1) {
   try {
-    console.log(`\n🔄 Attempt ${attempt}/${config.retries}: Testing SMTP connection...`);
+    console.log(`\n🔄 Attempt ${attempt}/${config.retries}: Testing Zoho SMTP connection...`);
     
     // Verify connection
+    console.log('🔐 Authenticating with Zoho SMTP...');
     await transporter.verify();
-    console.log('✅ SMTP Connection Verified');
+    console.log('✅ SMTP Authentication Successful');
     
     // Send test email
-    console.log('\n✉️ Sending test email...');
+    console.log('\n✉️ Sending test email to', config.testEmail);
     const info = await transporter.sendMail(testMessage);
     
-    console.log('\n🎉 Success! Test email sent:');
+    console.log('\n🎉 Success! Test email details:');
     console.log('- Message ID:', info.messageId);
-    console.log('- Accepted:', info.accepted);
-    console.log('- Rejected:', info.rejected);
-    console.log('\n💡 Check your inbox for the test email');
+    console.log('- Accepted Recipients:', info.accepted.join(', '));
+    console.log('- Rejected Recipients:', info.rejected.join(', ') || 'None');
+    console.log('- Zoho Response:', info.response || '250 OK');
+    
+    console.log('\n💡 Check your inbox at', config.testEmail, 'for the test email');
     
     return true;
   } catch (error) {
     console.error(`\n❌ Attempt ${attempt} Failed:`);
-    console.error('- Error:', error.message);
-    console.error('- Code:', error.code);
-    if (error.response) console.error('- SMTP Response:', error.response);
-    if (error.command) console.error('- Last Command:', error.command);
+    console.error('- Error Type:', error.name);
+    console.error('- Error Code:', error.code || 'UNKNOWN');
+    console.error('- Error Message:', error.message);
     
+    // Enhanced Zoho-specific error diagnostics
+    if (error.response) {
+      console.error('- SMTP Response:', error.response);
+      if (error.response.includes('550 5.7.1')) {
+        console.error('⚠️ Zoho Security Alert: Your IP may be blocked');
+      }
+    }
+    
+    if (error.command) {
+      console.error('- Last Command:', error.command);
+      if (error.command === 'AUTH') {
+        console.error('🔐 Authentication Failed: Verify username/password');
+      }
+    }
+
     if (attempt < config.retries) {
       const delay = attempt * config.retryDelay;
       console.log(`\n⌛ Retrying in ${delay/1000} seconds...`);
@@ -110,39 +142,49 @@ async function testConnection(attempt = 1) {
     }
     
     console.error('\n💥 All connection attempts failed');
-    console.error('Check your:');
-    console.error('1. SMTP credentials');
-    console.error('2. Network connection');
-    console.error('3. Firewall settings');
-    console.error('4. Zoho account settings (if using Zoho)');
-    
-    return false;
-  }
-}
-
-// Run tests
-(async () => {
-  console.log('\n🚀 Starting SMTP tests...');
-  const success = await testConnection();
-  
-  if (!success) {
-    console.error('\n❌ SMTP Configuration Failed');
-    console.log('\n💡 Troubleshooting Tips:');
-    console.log('1. Verify your SMTP credentials in .env');
-    console.log('2. Check Zoho Mail settings (if applicable)');
-    console.log('3. Test network connectivity to SMTP host');
-    console.log('4. Try with "rejectUnauthorized: false" in tls config');
-    console.log('5. Check for IP restrictions on your SMTP provider');
+    console.error('\n🔧 Zoho-Specific Troubleshooting:');
+    console.error('1. Log in to Zoho Mail Admin Console (https://admin.zoho.com)');
+    console.error('2. Navigate to: Control Panel > Mail Administration > Mail Server Settings');
+    console.error('3. Ensure:');
+    console.error('   - SMTP service is enabled');
+    console.error('   - "Require SSL" is checked');
+    console.error('   - "Allow less secure apps" is ON (temporarily)');
+    console.error('4. Check your domain MX records point to Zoho');
     
     process.exit(1);
   }
-  
-  console.log('\n✅ All tests completed successfully');
-  process.exit(0);
+}
+
+// Run tests with enhanced error handling
+(async () => {
+  try {
+    console.log('\n🚀 Starting Zoho SMTP tests...');
+    const success = await testConnection();
+    
+    if (success) {
+      console.log('\n✅ All tests completed successfully');
+      console.log('\nNext Steps:');
+      console.log('1. Set rejectUnauthorized: true in production');
+      console.log('2. Enable DKIM in Zoho Mail Admin Console');
+      console.log('3. Configure SPF records for your domain');
+      process.exit(0);
+    }
+  } catch (error) {
+    console.error('\n⚠️ Unhandled Error:', error.message);
+    if (error.stack) console.error(error.stack);
+    process.exit(1);
+  }
 })();
 
-// Handle uncaught errors
+// Enhanced error handling
 process.on('unhandledRejection', (err) => {
-  console.error('\n⚠️ Unhandled Rejection:', err.message);
+  console.error('\n🚨 Unhandled Rejection:', err.message);
+  if (err.response) console.error('SMTP Response:', err.response);
   process.exit(1);
+});
+
+process.on('SIGINT', () => {
+  console.log('\n🔧 Process interrupted - cleaning up...');
+  transporter.close();
+  process.exit(0);
 });
