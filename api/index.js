@@ -11,7 +11,7 @@ const path = require('path');
 const fs = require('fs');
 const morgan = require('morgan');
 const rfs = require('rotating-file-stream');
-const { initializeTransporter } = require('./controllers/emailController');
+const { transporter } = require('./controllers/emailController'); // Updated import
 
 // Initialize Express app
 const app = express();
@@ -123,15 +123,15 @@ mongoose.connection.on('disconnected', () => {
 // ==================== Initialize Services ====================
 const initializeServices = async () => {
   try {
-    // Initialize Email Transporter
-    await initializeTransporter();
-    console.log('✉️ Email transporter initialized');
-    
-    // Add other service initializations here if needed
-    
+    // Email service is now self-initializing in emailController.js
+    console.log('✅ All services initialized successfully');
     return true;
   } catch (err) {
     console.error('❌ Service initialization failed:', err);
+    if (IS_PRODUCTION) {
+      // Implement production alerting here
+      require('./monitoring').alertServiceInitializationFailed(err);
+    }
     throw err;
   }
 };
@@ -187,6 +187,9 @@ app.get('/api/system-info', (req, res) => {
       status: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
       name: mongoose.connection.db?.databaseName,
       models: mongoose.modelNames()
+    },
+    email: {
+      status: transporter ? 'ready' : 'unavailable'
     }
   });
 });
@@ -299,6 +302,7 @@ const startServer = async () => {
       🚀 Server running at ${BACKEND_URL}
       Environment: ${process.env.NODE_ENV || 'development'}
       MongoDB: ${mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'}
+      Email Service: ${transporter ? 'ready' : 'unavailable'}
       Process ID: ${process.pid}
       `);
     });
