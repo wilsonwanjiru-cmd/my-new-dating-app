@@ -5,8 +5,8 @@ require("dotenv").config();
 
 // Production Email Configuration
 const config = {
-  baseUrl: process.env.BACKEND_URL,
-  frontendUrl: process.env.FRONTEND_URL,
+  baseUrl: process.env.BACKEND_URL || "http://localhost:5000",
+  frontendUrl: process.env.FRONTEND_URL || "http://localhost:8081", // Single URL for both web and mobile
   from: process.env.SMTP_FROM || `Ruda Dating <${process.env.SMTP_USER}>`,
   token: {
     expiry: 24 * 60 * 60 * 1000, // 24 hours
@@ -14,193 +14,34 @@ const config = {
   }
 };
 
-// Enhanced SMTP Configuration with Zoho optimizations
+// SMTP Configuration
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || 'smtp.zoho.com',
   port: parseInt(process.env.SMTP_PORT) || 465,
-  secure: true, // Force SSL for Zoho
+  secure: true,
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASSWORD
   },
   tls: {
     minVersion: 'TLSv1.2',
-    ciphers: 'HIGH:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!SRP:!CAMELLIA',
-    rejectUnauthorized: process.env.NODE_ENV === 'production' // Only strict in production
+    rejectUnauthorized: process.env.NODE_ENV === 'production'
   },
-  pool: true,
-  maxConnections: 5,
-  maxMessages: 50,
-  connectionTimeout: 60000, // Increased timeout
-  socketTimeout: 60000,
-  greetingTimeout: 30000,
-  logger: true, // Enable detailed logging
-  debug: process.env.NODE_ENV !== 'production', // Debug in non-production
-  // Zoho-specific optimizations
-  secureConnection: true,
-  requireTLS: true,
-  tls: {
-    servername: process.env.SMTP_HOST || 'smtp.zoho.com'
-  }
+  logger: true,
+  debug: process.env.NODE_ENV !== 'production'
 });
 
-// Enhanced connection verification with detailed diagnostics
-const verifyConnection = async (attempt = 1, maxAttempts = 3) => {
-  const delay = Math.min(5000 * Math.pow(2, attempt - 1), 30000); // Max 30s delay
-  
-  try {
-    await transporter.verify();
-    console.log('✅ SMTP Connection Verified');
-    
-    // Enhanced event listeners
-    transporter.on('idle', () => {
-      console.log('🔄 SMTP Connection Pool Available');
-    });
-    
-    transporter.on('error', (err) => {
-      console.error('‼️ SMTP Detailed Error:', {
-        error: err.message,
-        code: err.code,
-        command: err.command,
-        response: err.response,
-        stack: err.stack,
-        timestamp: new Date().toISOString()
-      });
-      
-      if (process.env.NODE_ENV === 'production') {
-        // Example integration with monitoring service
-        console.error('ALERT: Critical SMTP failure detected');
-      }
-    });
-    
-    return true;
-  } catch (error) {
-    console.error(`❌ SMTP Verification Attempt ${attempt}/${maxAttempts} Failed:`, {
-      error: error.message,
-      code: error.code,
-      response: error.response,
-      stack: error.stack,
-      timestamp: new Date().toISOString()
-    });
-
-    if (attempt < maxAttempts) {
-      console.log(`⌛ Retrying in ${delay/1000} seconds...`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-      return verifyConnection(attempt + 1, maxAttempts);
-    }
-
-    console.error('💥 All SMTP connection attempts failed');
-    if (process.env.NODE_ENV === 'production') {
-      console.error('ALERT: SMTP service unavailable');
-    }
-    return false;
-  }
-};
-
-// Initialize connection with enhanced monitoring
-(async () => {
-  try {
-    const connectionVerified = await verifyConnection();
-    
-    if (!connectionVerified) {
-      console.warn('⚠️ Email service unavailable - some features may be limited');
-      if (process.env.NODE_ENV === 'production') {
-        console.error('ALERT: Proceeding without email service');
-      }
-    }
-  } catch (err) {
-    console.error('❌ SMTP Initialization Error:', {
-      message: err.message,
-      stack: err.stack,
-      timestamp: new Date().toISOString()
-    });
-  }
-})();
-
-// Enhanced email sending with circuit breaker pattern
-const sendEmailWithRetry = async (mailOptions, attempt = 1) => {
-  const maxAttempts = 3;
-  const delay = Math.min(3000 * attempt, 10000); // Max 10s delay
-  
-  try {
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`✉️ Email sent to ${mailOptions.to}`, {
-      messageId: info.messageId,
-      subject: mailOptions.subject,
-      accepted: info.accepted,
-      rejected: info.rejected,
-      timestamp: new Date().toISOString()
-    });
-    return info;
-  } catch (error) {
-    console.error(`📧 Email Attempt ${attempt}/${maxAttempts} Failed:`, {
-      to: mailOptions.to,
-      error: error.message,
-      code: error.code,
-      response: error.response,
-      command: error.command,
-      stack: error.stack,
-      timestamp: new Date().toISOString()
-    });
-
-    if (attempt < maxAttempts) {
-      await new Promise(resolve => setTimeout(resolve, delay));
-      return sendEmailWithRetry(mailOptions, attempt + 1);
-    }
-    
-    throw {
-      ...error,
-      isEmailError: true,
-      recipient: mailOptions.to,
-      finalAttempt: true,
-      timestamp: new Date().toISOString()
-    };
-  }
-};
-
-// Enhanced Email Templates with dynamic styling
-const templates = {
-  verification: (link, expiryDate, user) => ({
-    subject: "Verify Your Ruda Dating Account",
-    text: `Welcome ${user.name},\n\nPlease verify your email by clicking: ${link}\n\nThis link expires: ${expiryDate}\n\nIf you didn't request this, please ignore this email.`,
-    html: `<!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Email Verification</title>
-      <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px; color: #333; }
-        .header { color: #4f46e5; text-align: center; margin-bottom: 25px; }
-        .button { display: inline-block; padding: 12px 24px; background-color: #4f46e5; color: white; text-decoration: none; border-radius: 4px; font-weight: 500; margin: 20px 0; }
-        .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #eaeaea; font-size: 12px; color: #777; text-align: center; }
-        .container { background-color: #f9fafb; padding: 30px; border-radius: 8px; }
-        .expiry-notice { color: #dc2626; font-weight: 500; margin-top: 15px; }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <div class="header">
-          <h2>Ruda Dating</h2>
-          <p>Hi ${user.name},</p>
-        </div>
-        <p>Thank you for signing up! Please verify your email address:</p>
-        <div style="text-align: center;">
-          <a href="${link}" class="button">Verify Email</a>
-        </div>
-        <p class="expiry-notice">This verification link expires on ${expiryDate}.</p>
-        <div class="footer">
-          <p>If you didn't request this, please ignore this email.</p>
-          <p>© ${new Date().getFullYear()} Ruda Dating. All rights reserved.</p>
-        </div>
-      </div>
-    </body>
-    </html>`
-  })
+/**
+ * Device detection (kept for analytics)
+ */
+const detectDevicePlatform = (userAgent) => {
+  if (!userAgent) return 'web';
+  const isMobile = /Mobile|Android|iPhone|iPad|iPod|Windows Phone/i.test(userAgent);
+  return isMobile ? 'mobile' : 'web';
 };
 
 /**
- * Enhanced send verification email with better error handling
+ * Send verification email
  */
 const sendVerificationEmail = async (email, verificationToken) => {
   try {
@@ -211,7 +52,7 @@ const sendVerificationEmail = async (email, verificationToken) => {
     if (!user) throw new Error("User not found");
     if (user.verified) throw new Error("Email already verified");
 
-    // Check if recent verification was sent
+    // Check if verification was recently sent
     if (user.verificationSentAt && 
         (Date.now() - new Date(user.verificationSentAt).getTime()) < 60000) {
       throw new Error("Verification email recently sent");
@@ -226,59 +67,72 @@ const sendVerificationEmail = async (email, verificationToken) => {
       { 
         $set: { 
           verificationToken: token,
-          verificationSentAt: new Date() 
-        } 
+          verificationSentAt: new Date()
+        }
       }
     );
 
     const mailOptions = {
       from: config.from,
       to: email,
-      ...templates.verification(verificationLink, expiryDate, user),
+      subject: "Verify Your Ruda Dating Account",
+      text: `Welcome ${user.name},\n\nPlease verify your email by clicking: ${verificationLink}\n\nThis link expires: ${expiryDate}`,
+      html: `<!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px; }
+          .button { 
+            display: inline-block; 
+            padding: 12px 24px; 
+            background-color: #4f46e5; 
+            color: white; 
+            text-decoration: none; 
+            border-radius: 4px; 
+            margin: 15px 0;
+          }
+          .footer { margin-top: 20px; padding-top: 10px; border-top: 1px solid #eee; font-size: 12px; color: #666; }
+        </style>
+      </head>
+      <body>
+        <p>Hi ${user.name},</p>
+        <p>Please click the button below to verify your email:</p>
+        <div style="text-align: center;">
+          <a href="${verificationLink}" class="button">Verify Email</a>
+        </div>
+        <p>This link expires on ${expiryDate}.</p>
+        <div class="footer">
+          <p>If you didn't request this, please ignore this email.</p>
+        </div>
+      </body>
+      </html>`,
       headers: {
-        "X-Priority": "1",
-        "X-Mailer": "Ruda Dating",
-        "X-Auto-Response-Suppress": "All",
-        "Precedence": "bulk"
-      },
-      priority: 'high',
-      dkim: process.env.DKIM_PRIVATE_KEY ? {
-        domainName: process.env.DOMAIN,
-        keySelector: "email",
-        privateKey: process.env.DKIM_PRIVATE_KEY
-      } : undefined
+        'X-Priority': '1',
+        'X-Mailer': 'Ruda Dating App'
+      }
     };
 
-    const info = await sendEmailWithRetry(mailOptions);
+    const info = await transporter.sendMail(mailOptions);
     
     return {
       success: true,
       messageId: info.messageId,
       verificationLink,
-      expiry: expiryDate,
-      timestamp: new Date().toISOString()
+      expiry: expiryDate
     };
   } catch (error) {
     console.error("Verification email failed:", {
       email,
       error: error.message,
-      code: error.code,
       stack: error.stack,
       timestamp: new Date().toISOString()
     });
-    
-    throw {
-      ...error,
-      isVerificationEmailError: true,
-      userEmail: email,
-      operation: 'sendVerificationEmail',
-      timestamp: new Date().toISOString()
-    };
+    throw error;
   }
 };
 
 /**
- * Enhanced email verification with security checks
+ * Verify user's email using token with unified redirect
  */
 const verifyEmail = async (req, res) => {
   try {
@@ -320,40 +174,44 @@ const verifyEmail = async (req, res) => {
       });
     }
 
+    // Update user verification status
     const updatedUser = await User.findOneAndUpdate(
       { _id: user._id },
       {
         $set: { 
-          verified: true, 
+          verified: true,
           verifiedAt: new Date(),
-          verificationSentAt: null 
+          verificationSentAt: null
         },
-        $unset: { verificationToken: 1 }
+        $unset: { verificationToken: "" }
       },
       { new: true }
     );
 
+    // Unified redirect with device info
+    const userAgent = req.headers['user-agent'] || '';
+    const isMobile = /Mobile|Android|iPhone/i.test(userAgent);
+
     return res.redirect(
-      `${config.frontendUrl}/verified?success=true&email=${encodeURIComponent(updatedUser.email)}`
+      `${config.frontendUrl}/email-verified?success=true&email=${encodeURIComponent(updatedUser.email)}&device=${isMobile ? 'mobile' : 'web'}`
     );
+
   } catch (error) {
     console.error("Email verification error:", {
       error: error.message,
-      code: error.code,
       stack: error.stack,
       timestamp: new Date().toISOString()
     });
-    return res.status(500).json({
-      success: false,
-      code: "SERVER_ERROR",
-      message: "An error occurred during verification",
-      timestamp: new Date().toISOString()
-    });
+    
+    // Fallback redirect
+    return res.redirect(
+      `${config.frontendUrl}/email-verified?success=false&error=verification_failed`
+    );
   }
 };
 
 /**
- * Enhanced resend verification with rate limiting protection
+ * Resend verification email with rate limiting
  */
 const resendVerificationEmail = async (req, res) => {
   try {
@@ -368,8 +226,7 @@ const resendVerificationEmail = async (req, res) => {
       });
     }
 
-    const decodedEmail = decodeURIComponent(email);
-    const user = await User.findOne({ email: decodedEmail })
+    const user = await User.findOne({ email: decodeURIComponent(email) })
       .select("_id name email verified verificationToken verifiedAt verificationSentAt")
       .lean();
 
@@ -392,14 +249,14 @@ const resendVerificationEmail = async (req, res) => {
       });
     }
 
-    // Check if verification was recently sent
+    // Check resend cooldown (60 seconds)
     if (user.verificationSentAt && 
-        (Date.now() - new Date(user.verificationSentAt).getTime()) < 60000) {
+        (Date.now() - new Date(user.verificationSentAt).getTime() < 60000)) {
       return res.status(429).json({
         success: false,
         code: "RATE_LIMITED",
-        message: "Verification email recently sent. Please wait before requesting another.",
-        nextRequest: new Date(new Date(user.verificationSentAt).getTime() + 60000),
+        message: "Please wait before requesting another verification email",
+        retryAfter: 60,
         timestamp: new Date().toISOString()
       });
     }
@@ -408,52 +265,25 @@ const resendVerificationEmail = async (req, res) => {
 
     return res.status(200).json({
       success: true,
+      code: "RESENT_SUCCESS",
       message: "Verification email resent",
       messageId: result.messageId,
       timestamp: new Date().toISOString()
     });
+
   } catch (error) {
     console.error("Resend verification error:", {
       error: error.message,
-      code: error.code,
       stack: error.stack,
       timestamp: new Date().toISOString()
     });
     
-    const statusCode = error.isVerificationEmailError ? 502 : 500;
-    return res.status(statusCode).json({
+    return res.status(500).json({
       success: false,
-      code: error.code || "SERVER_ERROR",
+      code: "SERVER_ERROR",
       message: error.message || "Failed to resend verification email",
       timestamp: new Date().toISOString()
     });
-  }
-};
-
-// Utility function
-const generateVerificationToken = () => crypto.randomBytes(config.token.length).toString("hex");
-
-// Enhanced health check
-const checkEmailService = async () => {
-  try {
-    const isVerified = await transporter.verify();
-    return { 
-      status: isVerified ? 'ready' : 'unstable',
-      timestamp: new Date().toISOString(),
-      details: {
-        host: transporter.options.host,
-        port: transporter.options.port,
-        secure: transporter.options.secure
-      }
-    };
-  } catch (error) {
-    return { 
-      status: 'unavailable', 
-      error: error.message,
-      code: error.code,
-      stack: error.stack,
-      timestamp: new Date().toISOString()
-    };
   }
 };
 
@@ -462,11 +292,8 @@ module.exports = {
   sendVerificationEmail,
   verifyEmail,
   resendVerificationEmail,
-  generateVerificationToken,
-  checkEmailService,
-  // For testing/monitoring
+  // For testing
   _test: {
-    templates,
-    config
+    detectDevicePlatform
   }
 };
