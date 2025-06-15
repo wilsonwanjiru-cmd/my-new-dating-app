@@ -46,7 +46,7 @@ const fetchUserDetails = async (req, res) => {
 // Update User Profile Images
 const updateUserProfileImages = async (req, res) => {
   const { userId } = req.params;
-  const { profileImages } = req.body; // assuming this is an array of image URLs
+  const { profileImages } = req.body;
 
   try {
     const user = await User.findByIdAndUpdate(userId, { profileImages }, { new: true });
@@ -58,7 +58,7 @@ const updateUserProfileImages = async (req, res) => {
   }
 };
 
-// Add a Crush to User's Crush List
+// Add a Crush
 const addCrush = async (req, res) => {
   const { userId } = req.params;
   const { crushId } = req.body;
@@ -77,7 +77,7 @@ const addCrush = async (req, res) => {
   }
 };
 
-// Remove a Crush from User's Crush List
+// Remove a Crush
 const removeCrush = async (req, res) => {
   const { userId } = req.params;
   const { crushId } = req.body;
@@ -96,25 +96,7 @@ const removeCrush = async (req, res) => {
   }
 };
 
-// Verify User Email
-const verifyUserEmail = async (req, res) => {
-  const { verificationToken } = req.params;
-
-  try {
-    const user = await User.findOne({ verification: verificationToken });
-    if (!user) return res.status(404).json({ message: "Invalid or expired token" });
-
-    user.verified = true;
-    user.verification = null; // clear verification token once verified
-    await user.save();
-
-    return res.status(200).json({ message: "Email verified successfully", user });
-  } catch (error) {
-    res.status(500).json({ message: "Error verifying user email", error });
-  }
-};
-
-// Update User Preferences (Turn Ons, Looking For)
+// Update User Preferences
 const updateUserPreferences = async (req, res) => {
   const { userId } = req.params;
   const { turnOns, lookingFor } = req.body;
@@ -178,7 +160,7 @@ const addTurnOn = async (req, res) => {
 
     const user = await User.findByIdAndUpdate(
       userId,
-      { $addToSet: { turnOns: turnOn } }, // Use $addToSet to avoid duplicates
+      { $addToSet: { turnOns: turnOn } },
       { new: true }
     );
 
@@ -224,7 +206,7 @@ const addLookingFor = async (req, res) => {
 
     const user = await User.findByIdAndUpdate(
       userId,
-      { $addToSet: { lookingFor: lookingFor } }, // Use $addToSet to avoid duplicates
+      { $addToSet: { lookingFor } },
       { new: true }
     );
 
@@ -247,7 +229,7 @@ const removeLookingFor = async (req, res) => {
 
     const user = await User.findByIdAndUpdate(
       userId,
-      { $pull: { lookingFor: lookingFor } },
+      { $pull: { lookingFor } },
       { new: true }
     );
 
@@ -267,20 +249,16 @@ const getReceivedLikesDetails = async (req, res) => {
   try {
     const { userId } = req.params;
 
-    // Find the user and populate the received likes
     const user = await User.findById(userId).populate({
       path: "receivedLikes",
-      select: "name profileImages description", // Select the fields you want to return
+      select: "name profileImages description",
     });
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Extract the received likes details
-    const receivedLikesDetails = user.receivedLikes;
-
-    res.status(200).json({ receivedLikesDetails });
+    res.status(200).json({ receivedLikesDetails: user.receivedLikes });
   } catch (error) {
     console.error("Error fetching received likes details:", error);
     res.status(500).json({ message: "Server error" });
@@ -294,7 +272,6 @@ module.exports = {
   updateUserProfileImages,
   addCrush,
   removeCrush,
-  verifyUserEmail,
   updateUserPreferences,
   deleteUserAccount,
   addProfileImage,
@@ -302,5 +279,5 @@ module.exports = {
   removeTurnOn,
   addLookingFor,
   removeLookingFor,
-  getReceivedLikesDetails, // Export the new function
+  getReceivedLikesDetails,
 };

@@ -2,10 +2,9 @@ const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
 const User = require("../models/user");
-const { sendVerificationEmail } = require("./emailController");
 
 const secretKey = process.env.JWT_SECRET || crypto.randomBytes(32).toString("hex");
-const SALT_ROUNDS = process.env.SALT_ROUNDS || 10;
+const SALT_ROUNDS = parseInt(process.env.SALT_ROUNDS) || 10;
 
 // Register User
 exports.registerUser = async (req, res) => {
@@ -36,43 +35,25 @@ exports.registerUser = async (req, res) => {
       return res.status(409).json({ 
         success: false,
         message: "User already exists",
-        code: "USER_EXISTS",
-        verified: existingUser.verified 
+        code: "USER_EXISTS"
       });
     }
 
-    // Generate verification token and hash password
-    const verificationToken = crypto.randomBytes(20).toString("hex");
+    // Hash password
     const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
-    // Create new user
+    // Create and save user
     const newUser = new User({
       name,
       email,
-      password: hashedPassword,
-      verificationToken,
-      verified: false
+      password: hashedPassword
     });
 
-    // Save user to database
     await newUser.save();
-
-    // Send verification email
-    try {
-      await sendVerificationEmail(email, verificationToken);
-    } catch (emailError) {
-      console.error("Email sending error:", emailError);
-      return res.status(202).json({ 
-        success: true,
-        message: "Registration successful but verification email failed to send",
-        userId: newUser._id,
-        action: "resend"
-      });
-    }
 
     res.status(201).json({ 
       success: true,
-      message: "Registration successful. Please check your email to verify your account.",
+      message: "Registration successful",
       userId: newUser._id
     });
 
@@ -121,17 +102,6 @@ exports.loginUser = async (req, res) => {
       });
     }
 
-    // Check if the user is verified
-    if (!user.verified) {
-      return res.status(403).json({ 
-        success: false,
-        message: "Email not verified",
-        code: "UNVERIFIED_EMAIL",
-        action: "resend",
-        userId: user._id
-      });
-    }
-
     // Generate JWT token
     const token = jwt.sign(
       { 
@@ -148,7 +118,6 @@ exports.loginUser = async (req, res) => {
       id: user._id,
       name: user.name,
       email: user.email,
-      verified: user.verified,
       createdAt: user.createdAt
     };
 
@@ -163,77 +132,6 @@ exports.loginUser = async (req, res) => {
     res.status(500).json({ 
       success: false,
       message: "Login failed",
-      code: "SERVER_ERROR",
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
-
-// Resend Verification Email
-exports.resendVerificationEmail = async (req, res) => {
-  try {
-    const { email, userId } = req.body;
-
-    if (!email && !userId) {
-      return res.status(400).json({ 
-        success: false,
-        message: "Email or user ID is required",
-        code: "MISSING_IDENTIFIER"
-      });
-    }
-
-    // Find user by email or ID
-    const user = await User.findOne(
-      userId ? { _id: userId } : { email }
-    ).select("+verificationToken");
-
-    if (!user) {
-      return res.status(404).json({ 
-        success: false,
-        message: "User not found",
-        code: "USER_NOT_FOUND"
-      });
-    }
-
-    if (user.verified) {
-      return res.status(400).json({ 
-        success: false,
-        message: "Email is already verified",
-        code: "ALREADY_VERIFIED",
-        verifiedAt: user.verifiedAt
-      });
-    }
-
-    // Generate new token if none exists
-    if (!user.verificationToken) {
-      user.verificationToken = crypto.randomBytes(20).toString("hex");
-      await user.save();
-    }
-
-    // Send verification email
-    try {
-      await sendVerificationEmail(user.email, user.verificationToken);
-    } catch (emailError) {
-      console.error("Email sending error:", emailError);
-      return res.status(500).json({
-        success: false,
-        message: "Failed to send verification email",
-        code: "EMAIL_FAILURE"
-      });
-    }
-
-    res.status(200).json({ 
-      success: true,
-      message: "Verification email resent",
-      email: user.email,
-      userId: user._id
-    });
-
-  } catch (error) {
-    console.error("Resend verification error:", error);
-    res.status(500).json({ 
-      success: false,
-      message: "Failed to resend verification email",
       code: "SERVER_ERROR",
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });

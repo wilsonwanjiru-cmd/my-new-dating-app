@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const validator = require("validator"); // Install this package using `npm install validator`
+const validator = require("validator"); // Ensure this is installed: npm install validator
 
 const userSchema = new mongoose.Schema(
   {
@@ -15,7 +15,7 @@ const userSchema = new mongoose.Schema(
       lowercase: true,
       trim: true,
       validate: {
-        validator: (v) => validator.isEmail(v), // Use validator library for email validation
+        validator: (v) => validator.isEmail(v),
         message: (props) => `${props.value} is not a valid email address!`,
       },
     },
@@ -29,24 +29,16 @@ const userSchema = new mongoose.Schema(
       enum: ["male", "female", "other"],
       default: "other",
     },
-    verified: {
-      type: Boolean,
-      default: false, // Default to false until email is verified
-    },
-    verificationToken: {
-      type: String,
-      select: false, // Prevent it from being returned in queries by default
-    },
     crushes: [
       {
         type: mongoose.Schema.Types.ObjectId,
-        ref: "User", // Reference to other User documents
+        ref: "User",
       },
     ],
     receivedLikes: [
       {
         type: mongoose.Schema.Types.ObjectId,
-        ref: "User", // Reference to other User documents
+        ref: "User",
       },
     ],
     profileImages: [
@@ -54,7 +46,7 @@ const userSchema = new mongoose.Schema(
         type: String,
         validate: {
           validator: (v) =>
-            /^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|avif)$/i.test(v), // URL format validation for image files
+            /^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|avif)$/i.test(v),
           message: (props) => `${props.value} is not a valid image URL!`,
         },
       },
@@ -62,7 +54,7 @@ const userSchema = new mongoose.Schema(
     description: {
       type: String,
       maxlength: [500, "Description cannot exceed 500 characters"],
-      default: "", // Default to an empty string
+      default: "",
     },
     turnOns: [
       {
@@ -78,15 +70,15 @@ const userSchema = new mongoose.Schema(
     ],
     isSubscribed: {
       type: Boolean,
-      default: false, // Default to false (user is not subscribed)
+      default: false,
     },
     subscriptionExpires: {
       type: Date,
-      default: null, // Default to null (no subscription expiry date)
+      default: null,
     },
   },
   {
-    timestamps: true, // Automatically create `createdAt` and `updatedAt` fields
+    timestamps: true,
   }
 );
 

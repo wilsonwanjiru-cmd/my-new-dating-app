@@ -6,7 +6,6 @@ const {
   updateUserProfileImages,
   addCrush,
   removeCrush,
-  verifyUserEmail,
   updateUserPreferences,
   deleteUserAccount,
   addProfileImage,
@@ -42,9 +41,6 @@ router.put("/:userId/crush", addCrush);
 // Remove Crush from User's Crush List
 router.delete("/:userId/crush", removeCrush);
 
-// Verify User Email
-router.get("/:verificationToken/verify", verifyUserEmail);
-
 // Update User Preferences (Turn Ons, Looking For)
 router.put("/:userId/preferences", updateUserPreferences);
 
@@ -64,7 +60,7 @@ router.put("/:userId/looking-for/remove", removeLookingFor);
 router.delete("/:userId", deleteUserAccount);
 
 // Fetch Received Likes Details
-router.get("/received-likes/:userId/details", getReceivedLikesDetails); // Corrected route
+router.get("/received-likes/:userId/details", getReceivedLikesDetails);
 
 // Match Routes
 router.post("/match", matchController.createMatch); // Create a Match
