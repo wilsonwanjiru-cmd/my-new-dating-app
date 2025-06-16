@@ -55,6 +55,7 @@ const allowedOrigins = [
   'http://localhost:5000',
   'https://rudadatingsite.singles',
   'https://dating-app-3eba.onrender.com',
+  'https://*.onrender.com', // Allow all Render subdomains
   'exp://192.168.249.233:3000',
   'http://192.168.249.233:3000',
 ].filter(Boolean);
@@ -73,6 +74,14 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
 }));
 
+// ==================== Request Timeout Handling ====================
+app.use((req, res, next) => {
+  req.setTimeout(10000, () => {
+    res.status(503).json({ error: 'Request timeout' });
+  });
+  next();
+});
+
 // ==================== Redirect to HTTPS ====================
 if (IS_PRODUCTION) {
   app.use((req, res, next) => {
@@ -90,7 +99,6 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // ==================== MongoDB Connection ====================
 const connectDB = require('./config/db');
 
-// Improved MongoDB connection handling
 const initializeDatabase = async () => {
   try {
     await connectDB();
@@ -98,9 +106,7 @@ const initializeDatabase = async () => {
     return true;
   } catch (err) {
     console.error(`❌ MongoDB connection error: ${err.message}`);
-    if (IS_PRODUCTION) {
-      process.exit(1);
-    }
+    if (IS_PRODUCTION) process.exit(1);
     return false;
   }
 };
@@ -134,9 +140,7 @@ const loadRoutes = async () => {
       }
     } catch (err) {
       console.error(`❌ Failed to load route ${route.path}:`, err);
-      if (IS_PRODUCTION) {
-        process.exit(1);
-      }
+      if (IS_PRODUCTION) process.exit(1);
     }
   }
 };
@@ -148,10 +152,17 @@ try {
   console.log('✅ Email service initialized');
 } catch (err) {
   console.error('❌ Email service initialization failed:', err.message);
-  if (IS_PRODUCTION) {
-    process.exit(1);
-  }
+  if (IS_PRODUCTION) process.exit(1);
 }
+
+// ==================== Health Check Endpoint ====================
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    timestamp: new Date().toISOString()
+  });
+});
 
 // ==================== Monitoring Endpoint ====================
 app.get('/api/system-info', (req, res) => {
@@ -186,17 +197,14 @@ app.get('/api/system-info', (req, res) => {
   });
 });
 
-// ==================== Docs Endpoint ====================
+// ==================== Root Endpoint ====================
 app.get('/', (req, res) => {
   res.json({
-    message: 'Ruda Dating App API',
     status: 'healthy',
+    message: 'Ruda Dating App API',
     version: process.env.npm_package_version || '1.0.0',
     environment: process.env.NODE_ENV || 'development',
     timestamp: new Date().toISOString(),
-    documentation: IS_PRODUCTION 
-      ? 'https://dating-app-3eba.onrender.com/docs'
-      : `${BACKEND_URL}/api-docs`,
     endpoints: [
       { path: '/api/health', methods: ['GET'], description: 'Health check' },
       { path: '/api/auth', methods: ['POST', 'GET'], description: 'Authentication' },
@@ -288,17 +296,16 @@ const startServer = async () => {
   try {
     // Initialize database first
     const dbConnected = await initializeDatabase();
-    if (!dbConnected) {
-      throw new Error('Database connection failed');
-    }
+    if (!dbConnected) throw new Error('Database connection failed');
 
     // Then load routes
     await loadRoutes();
 
     // Start the server
-    server.listen(PORT, HOST, () => {
+    const actualPort = process.env.PORT || 5000;
+    server.listen(actualPort, '0.0.0.0', () => {
       console.log(`
-🚀 Server running at ${BACKEND_URL}
+🚀 Server running on port ${actualPort}
 Environment: ${process.env.NODE_ENV || 'development'}
 MongoDB: ${mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'}
 Email Service: ${transporter ? 'ready' : 'unavailable'}
@@ -327,7 +334,6 @@ const shutdown = (signal) => {
   }, 10000);
 };
 
-// ==================== Process Event Handlers ====================
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('unhandledRejection', (err) => {
