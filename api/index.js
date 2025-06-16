@@ -15,54 +15,66 @@ const rfs = require('rotating-file-stream');
 const app = express();
 const server = http.createServer(app);
 
-// ==================== Env Config ====================
+// ==================== Enhanced Configuration ====================
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
-const PORT = process.env.PORT || 5000;
+const PORT = parseInt(process.env.PORT) || 5000;
 const HOST = process.env.HOST || '0.0.0.0';
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 const BACKEND_URL = process.env.BACKEND_URL || `http://${HOST}:${PORT}`;
 
-// ==================== Logging ====================
+// Parse CORS_ALLOWED_ORIGINS from environment variables
+const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS 
+  ? process.env.CORS_ALLOWED_ORIGINS.split(',') 
+  : [
+      'http://localhost:3000',
+      'http://localhost:19006',
+      'http://localhost:5000',
+      'https://rudadatingsite.singles',
+      'https://dating-app-3eba.onrender.com',
+      'https://*.onrender.com'
+    ];
+
+// ==================== Enhanced Logging ====================
 const logDirectory = path.join(__dirname, 'logs');
 if (!fs.existsSync(logDirectory)) fs.mkdirSync(logDirectory);
 
 const accessLogStream = rfs.createStream('access.log', {
   interval: '1d',
   path: logDirectory,
+  compress: 'gzip'
 });
 
 app.use(morgan(IS_PRODUCTION ? 'combined' : 'dev', {
   stream: IS_PRODUCTION ? accessLogStream : process.stdout,
+  skip: (req) => req.path === '/health' // Skip logging for health checks
 }));
 
 // ==================== Security Middleware ====================
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: IS_PRODUCTION,
+  hsts: IS_PRODUCTION
+}));
 app.set('trust proxy', 1);
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: IS_PRODUCTION ? 100 : 1000,
   message: 'Too many requests from this IP, please try again later',
+  standardHeaders: true,
+  legacyHeaders: false
 });
 app.use('/api', apiLimiter);
 
-// ==================== CORS ====================
-const allowedOrigins = [
-  FRONTEND_URL,
-  BACKEND_URL,
-  'http://localhost:3000',
-  'http://localhost:19006',
-  'http://localhost:5000',
-  'https://rudadatingsite.singles',
-  'https://dating-app-3eba.onrender.com',
-  'https://*.onrender.com', // Allow all Render subdomains
-  'exp://192.168.249.233:3000',
-  'http://192.168.249.233:3000',
-].filter(Boolean);
-
+// ==================== Enhanced CORS ====================
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.some(o => origin.startsWith(o))) {
+    if (!origin || allowedOrigins.some(o => {
+      // Handle wildcard subdomains
+      if (o.startsWith('https://*.')) {
+        const domain = o.replace('https://*.', '');
+        return origin.endsWith(domain);
+      }
+      return origin === o;
+    })) {
       callback(null, true);
     } else {
       console.warn(`❌ CORS blocked origin: ${origin}`);
@@ -72,17 +84,28 @@ app.use(cors({
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  maxAge: 86400
 }));
 
-// ==================== Request Timeout Handling ====================
+// ==================== Connection Management ====================
 app.use((req, res, next) => {
-  req.setTimeout(10000, () => {
-    res.status(503).json({ error: 'Request timeout' });
+  // Set timeout for all requests
+  req.setTimeout(15000, () => {
+    console.warn(`Request timeout: ${req.method} ${req.url}`);
+  });
+  
+  // Set server response timeout
+  res.setTimeout(15000, () => {
+    console.warn(`Response timeout: ${req.method} ${req.url}`);
   });
   next();
 });
 
-// ==================== Redirect to HTTPS ====================
+// Keep-alive headers
+server.keepAliveTimeout = 60000; // 60 seconds
+server.headersTimeout = 65000; // 65 seconds
+
+// ==================== HTTPS Redirect ====================
 if (IS_PRODUCTION) {
   app.use((req, res, next) => {
     if (req.headers['x-forwarded-proto'] !== 'https') {
@@ -92,27 +115,60 @@ if (IS_PRODUCTION) {
   });
 }
 
-// ==================== Parsers ====================
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// ==================== Body Parsers ====================
+app.use(express.json({ 
+  limit: '10mb',
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
+app.use(express.urlencoded({ 
+  extended: true, 
+  limit: '10mb',
+  parameterLimit: 10000
+}));
 
-// ==================== MongoDB Connection ====================
+// ==================== Database Connection ====================
 const connectDB = require('./config/db');
 
 const initializeDatabase = async () => {
   try {
     await connectDB();
     console.log(`✅ MongoDB connected: ${mongoose.connection.db.databaseName}`);
+    
+    // Configure MongoDB connection settings
+    mongoose.connection.on('connected', () => {
+      console.log('MongoDB connection established');
+    });
+    
+    mongoose.connection.on('error', (err) => {
+      console.error('MongoDB connection error:', err);
+    });
+    
+    mongoose.connection.on('disconnected', () => {
+      console.warn('MongoDB connection lost');
+    });
+    
     return true;
   } catch (err) {
     console.error(`❌ MongoDB connection error: ${err.message}`);
-    if (IS_PRODUCTION) process.exit(1);
+    if (IS_PRODUCTION) {
+      // Retry connection after delay
+      setTimeout(() => process.exit(1), 5000);
+    }
     return false;
   }
 };
 
 // ==================== Route Loader ====================
-const loadRoutes = async () => {
+const loadRoutes = () => {
+  // Clear require cache for routes in development
+  if (!IS_PRODUCTION) {
+    Object.keys(require.cache).forEach(key => {
+      if (key.includes('routes')) delete require.cache[key];
+    });
+  }
+
   const routeDefinitions = [
     { path: '/api/health', module: './routes/healthRoutes' },
     { path: '/api/auth', module: './routes/authRoutes' },
@@ -125,142 +181,97 @@ const loadRoutes = async () => {
     { path: '/api/photos', module: './routes/photoRoutes' }
   ];
 
-  for (const route of routeDefinitions) {
+  routeDefinitions.forEach((route) => {
     try {
+      // Use require for CommonJS modules
       const routeModule = require(route.module);
       
-      if (typeof routeModule === 'function' || routeModule instanceof express.Router) {
-        app.use(route.path, routeModule);
+      // Check for both default export and direct export
+      const router = routeModule.default || routeModule.router || routeModule;
+      
+      if (typeof router === 'function' || router instanceof express.Router) {
+        app.use(route.path, router);
         console.log(`✅ Route ${route.path} loaded successfully`);
-      } else if (routeModule && routeModule.router) {
-        app.use(route.path, routeModule.router);
-        console.log(`✅ Route ${route.path} loaded (object export)`);
       } else {
         throw new Error(`Invalid route export in ${route.module}`);
       }
     } catch (err) {
       console.error(`❌ Failed to load route ${route.path}:`, err);
-      if (IS_PRODUCTION) process.exit(1);
+      if (IS_PRODUCTION) {
+        console.error('Continuing with other routes despite error');
+      }
     }
-  }
+  });
 };
-
-// ==================== Email Service Initialization ====================
-let transporter;
-try {
-  transporter = require('./controllers/emailController').transporter;
-  console.log('✅ Email service initialized');
-} catch (err) {
-  console.error('❌ Email service initialization failed:', err.message);
-  if (IS_PRODUCTION) process.exit(1);
-}
 
 // ==================== Health Check Endpoint ====================
 app.get('/health', (req, res) => {
+  const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+  const memoryUsage = process.memoryUsage();
+  
   res.status(200).json({
-    status: 'ok',
-    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-    timestamp: new Date().toISOString()
-  });
-});
-
-// ==================== Monitoring Endpoint ====================
-app.get('/api/system-info', (req, res) => {
-  res.json({
-    status: 'operational',
+    status: 'healthy',
     timestamp: new Date().toISOString(),
-    system: {
-      platform: os.platform(),
-      uptime: os.uptime(),
-      load: os.loadavg(),
-      memory: {
-        total: os.totalmem(),
-        free: os.freemem(),
-        used: os.totalmem() - os.freemem(),
-      },
-      cpu: os.cpus().length,
+    database: dbStatus,
+    memory: {
+      rss: `${(memoryUsage.rss / 1024 / 1024).toFixed(2)} MB`,
+      heapTotal: `${(memoryUsage.heapTotal / 1024 / 1024).toFixed(2)} MB`,
+      heapUsed: `${(memoryUsage.heapUsed / 1024 / 1024).toFixed(2)} MB`
     },
-    process: {
-      pid: process.pid,
-      memory: process.memoryUsage(),
-      uptime: process.uptime(),
-      version: process.version,
-    },
-    database: {
-      status: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-      name: mongoose.connection.db?.databaseName,
-      models: mongoose.modelNames(),
-    },
-    email: {
-      status: transporter ? 'ready' : 'unavailable',
-    },
+    uptime: process.uptime()
   });
 });
 
 // ==================== Root Endpoint ====================
 app.get('/', (req, res) => {
   res.json({
-    status: 'healthy',
+    status: 'operational',
     message: 'Ruda Dating App API',
     version: process.env.npm_package_version || '1.0.0',
     environment: process.env.NODE_ENV || 'development',
     timestamp: new Date().toISOString(),
+    documentation: `${BACKEND_URL}/api-docs`,
     endpoints: [
       { path: '/api/health', methods: ['GET'], description: 'Health check' },
       { path: '/api/auth', methods: ['POST', 'GET'], description: 'Authentication' },
-      { path: '/api/users', methods: ['GET', 'PUT', 'DELETE'], description: 'User management' },
-      { path: '/api/system-info', methods: ['GET'], description: 'System monitoring' }
+      { path: '/api/users', methods: ['GET', 'PUT', 'DELETE'], description: 'User management' }
     ]
   });
 });
 
-// ==================== 404 Handler ====================
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    message: 'Endpoint not found',
-    requestedUrl: req.originalUrl,
-    availableEndpoints: [
-      '/api/auth',
-      '/api/users',
-      '/api/health',
-      '/api/system-info'
-    ]
-  });
-});
-
-// ==================== Error Handler ====================
+// ==================== Error Handling ====================
 app.use((err, req, res, next) => {
   const statusCode = err.statusCode || 500;
   const message = IS_PRODUCTION && statusCode === 500 
-    ? 'Internal server error'
+    ? 'Internal server error' 
     : err.message;
 
-  console.error(`[${new Date().toISOString()}] Error: ${message}`, {
-    url: req.originalUrl,
+  console.error(`[${new Date().toISOString()}] ${statusCode} ${req.method} ${req.url}`, {
+    error: message,
     stack: IS_PRODUCTION ? undefined : err.stack,
+    body: IS_PRODUCTION ? undefined : req.body
   });
 
   res.status(statusCode).json({
     success: false,
     message,
-    ...(IS_PRODUCTION ? {} : { stack: err.stack }),
+    ...(!IS_PRODUCTION && { stack: err.stack })
   });
 });
 
-// ==================== Socket.IO Setup ====================
+// ==================== Socket.IO Configuration ====================
 const io = new Server(server, {
   cors: {
     origin: allowedOrigins,
     methods: ['GET', 'POST'],
-    credentials: true,
+    credentials: true
   },
   connectionStateRecovery: {
     maxDisconnectionDuration: 2 * 60 * 1000,
-    skipMiddlewares: true,
+    skipMiddlewares: true
   },
   pingTimeout: 60000,
-  pingInterval: 25000,
+  pingInterval: 25000
 });
 
 io.on('connection', (socket) => {
@@ -294,56 +305,107 @@ io.on('connection', (socket) => {
 // ==================== Server Startup ====================
 const startServer = async () => {
   try {
+    console.log('🔄 Starting server initialization...');
+    
     // Initialize database first
+    console.log('🔄 Connecting to MongoDB...');
     const dbConnected = await initializeDatabase();
     if (!dbConnected) throw new Error('Database connection failed');
 
     // Then load routes
-    await loadRoutes();
+    console.log('🔄 Loading routes...');
+    loadRoutes(); // Changed to synchronous loading
 
     // Start the server
-    const actualPort = process.env.PORT || 5000;
-    server.listen(actualPort, '0.0.0.0', () => {
+    server.listen(PORT, HOST, () => {
       console.log(`
-🚀 Server running on port ${actualPort}
+🚀 Server running on port ${PORT}
 Environment: ${process.env.NODE_ENV || 'development'}
 MongoDB: ${mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'}
-Email Service: ${transporter ? 'ready' : 'unavailable'}
 Process ID: ${process.pid}
       `);
+      
+      // Verify server can handle requests
+      http.get(`http://localhost:${PORT}/health`, (res) => {
+        console.log(`✅ Internal health check: ${res.statusCode}`);
+      }).on('error', (err) => {
+        console.error('❌ Internal health check failed:', err);
+      });
     });
   } catch (err) {
     console.error('❌ Server failed to start:', err);
-    process.exit(1);
+    
+    // In production, wait before exiting to allow logs to flush
+    if (IS_PRODUCTION) {
+      setTimeout(() => process.exit(1), 5000);
+    } else {
+      process.exit(1);
+    }
   }
 };
 
-// ==================== Graceful Shutdown ====================
-const shutdown = (signal) => {
-  console.log(`🛑 Received ${signal}, shutting down gracefully...`);
-  server.close(async () => {
-    console.log('✅ HTTP server closed');
-    await mongoose.connection.close(false);
-    console.log('✅ MongoDB connection closed');
-    process.exit(0);
+// ==================== Process Management ====================
+process.on('SIGTERM', () => {
+  console.log('🛑 Received SIGTERM, shutting down gracefully...');
+  server.close(() => {
+    mongoose.connection.close(false).then(() => {
+      console.log('✅ Server shutdown complete');
+      process.exit(0);
+    });
   });
-
+  
+  // Force shutdown after timeout
   setTimeout(() => {
     console.error('⚠️ Force shutdown due to timeout');
     process.exit(1);
   }, 10000);
-};
+});
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGINT', () => {
+  console.log('🛑 Received SIGINT, shutting down gracefully...');
+  server.close(() => {
+    mongoose.connection.close(false).then(() => {
+      console.log('✅ Server shutdown complete');
+      process.exit(0);
+    });
+  });
+});
+
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled Rejection:', err);
-  if (IS_PRODUCTION) process.exit(1);
-});
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
-  if (IS_PRODUCTION) process.exit(1);
+  if (IS_PRODUCTION) {
+    // Don't exit immediately - try to keep running
+    console.error('Continuing despite unhandled rejection');
+  }
 });
 
-// ==================== Start the Application ====================
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+  if (IS_PRODUCTION) {
+    // Don't exit immediately - try to keep running
+    console.error('Continuing despite uncaught exception');
+  }
+});
+
+// ==================== Start Application ====================
 startServer();
+
+// ==================== Performance Monitoring ====================
+if (IS_PRODUCTION) {
+  setInterval(() => {
+    const memoryUsage = process.memoryUsage();
+    console.log('Memory usage:', {
+      rss: `${(memoryUsage.rss / 1024 / 1024).toFixed(2)} MB`,
+      heapTotal: `${(memoryUsage.heapTotal / 1024 / 1024).toFixed(2)} MB`,
+      heapUsed: `${(memoryUsage.heapUsed / 1024 / 1024).toFixed(2)} MB`
+    });
+    
+    // Check event loop latency
+    const start = process.hrtime();
+    setTimeout(() => {
+      const delta = process.hrtime(start);
+      const latency = (delta[0] * 1000) + (delta[1] / 1000000);
+      console.log(`Event loop latency: ${latency.toFixed(2)} ms`);
+    }, 0);
+  }, 30000);
+}
