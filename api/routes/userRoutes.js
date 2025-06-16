@@ -1,4 +1,5 @@
 const express = require("express");
+const router = express.Router();
 const {
   updateGender,
   updateDescription,
@@ -13,59 +14,67 @@ const {
   removeTurnOn,
   addLookingFor,
   removeLookingFor,
-  getReceivedLikesDetails, // Add this function
+  getReceivedLikesDetails,
 } = require("../controllers/userController");
 
 const matchController = require("../controllers/matchController");
 
-const router = express.Router();
+// Input validation middleware
+const validateUserId = (req, res, next) => {
+  if (!req.params.userId || !mongoose.Types.ObjectId.isValid(req.params.userId)) {
+    return res.status(400).json({ success: false, message: "Invalid user ID" });
+  }
+  next();
+};
 
-// Update User Gender
-router.put("/:userId/gender", updateGender);
+// Route definitions
+router.route("/:userId/gender")
+  .put(validateUserId, updateGender);
 
-// Update User Description
-router.put("/:userId/description", updateDescription);
+router.route("/:userId/description")
+  .put(validateUserId, updateDescription);
 
-// Fetch User Details
-router.get("/:userId", fetchUserDetails);
+router.route("/:userId")
+  .get(validateUserId, fetchUserDetails)
+  .delete(validateUserId, deleteUserAccount);
 
-// Update User Profile Images
-router.put("/:userId/profile-images", updateUserProfileImages);
+router.route("/:userId/profile-images")
+  .put(validateUserId, updateUserProfileImages)
+  .post(validateUserId, addProfileImage);
 
-// Add Profile Image
-router.post("/:userId/profile-images", addProfileImage);
+router.route("/:userId/crush")
+  .put(validateUserId, addCrush)
+  .delete(validateUserId, removeCrush);
 
-// Add Crush to User's Crush List
-router.put("/:userId/crush", addCrush);
+router.route("/:userId/preferences")
+  .put(validateUserId, updateUserPreferences);
 
-// Remove Crush from User's Crush List
-router.delete("/:userId/crush", removeCrush);
+router.route("/:userId/turn-ons/add")
+  .put(validateUserId, addTurnOn);
 
-// Update User Preferences (Turn Ons, Looking For)
-router.put("/:userId/preferences", updateUserPreferences);
+router.route("/:userId/turn-ons/remove")
+  .put(validateUserId, removeTurnOn);
 
-// Add Turn-On
-router.put("/:userId/turn-ons/add", addTurnOn);
+router.route("/:userId/looking-for")
+  .put(validateUserId, addLookingFor);
 
-// Remove Turn-On
-router.put("/:userId/turn-ons/remove", removeTurnOn);
+router.route("/:userId/looking-for/remove")
+  .put(validateUserId, removeLookingFor);
 
-// Add Looking-For
-router.put("/:userId/looking-for", addLookingFor);
+router.route("/received-likes/:userId/details")
+  .get(validateUserId, getReceivedLikesDetails);
 
-// Remove Looking-For
-router.put("/:userId/looking-for/remove", removeLookingFor);
+// Match-related routes
+router.route("/match")
+  .post(matchController.createMatch);
 
-// Delete User Account
-router.delete("/:userId", deleteUserAccount);
+router.route("/:userId/matches")
+  .get(validateUserId, matchController.getMatches);
 
-// Fetch Received Likes Details
-router.get("/received-likes/:userId/details", getReceivedLikesDetails);
+router.route("/:userId/crushes")
+  .get(validateUserId, matchController.getCrushes);
 
-// Match Routes
-router.post("/match", matchController.createMatch); // Create a Match
-router.get("/:userId/matches", matchController.getMatches); // Get User Matches
-router.get("/:userId/crushes", matchController.getCrushes); // Get User Crushes
-router.post("/unmatch", matchController.unmatch); // Unmatch Users
+router.route("/unmatch")
+  .post(matchController.unmatch);
 
 module.exports = router;

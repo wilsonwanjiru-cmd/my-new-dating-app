@@ -11,82 +11,69 @@ const path = require('path');
 const fs = require('fs');
 const morgan = require('morgan');
 const rfs = require('rotating-file-stream');
-const { transporter } = require('./controllers/emailController'); // Updated import
 
-// Initialize Express app
 const app = express();
 const server = http.createServer(app);
 
-// ==================== Environment Configuration ====================
+// ==================== Env Config ====================
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const PORT = process.env.PORT || 5000;
 const HOST = process.env.HOST || '0.0.0.0';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 const BACKEND_URL = process.env.BACKEND_URL || `http://${HOST}:${PORT}`;
 
-// ==================== Logging Configuration ====================
+// ==================== Logging ====================
 const logDirectory = path.join(__dirname, 'logs');
+if (!fs.existsSync(logDirectory)) fs.mkdirSync(logDirectory);
 
-// Ensure log directory exists
-if (!fs.existsSync(logDirectory)) {
-  fs.mkdirSync(logDirectory);
-}
-
-// Create a rotating write stream for access logs
 const accessLogStream = rfs.createStream('access.log', {
   interval: '1d',
-  path: logDirectory
+  path: logDirectory,
 });
 
-// Setup logging
 app.use(morgan(IS_PRODUCTION ? 'combined' : 'dev', {
-  stream: IS_PRODUCTION ? accessLogStream : process.stdout
+  stream: IS_PRODUCTION ? accessLogStream : process.stdout,
 }));
 
 // ==================== Security Middleware ====================
 app.use(helmet());
-app.set('trust proxy', 1); // Trust first proxy
+app.set('trust proxy', 1);
 
-// Rate limiting
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later'
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: 'Too many requests from this IP, please try again later',
 });
-
-// Apply to all API routes
 app.use('/api', apiLimiter);
 
-// ==================== CORS Configuration ====================
+// ==================== CORS ====================
 const allowedOrigins = [
   FRONTEND_URL,
   BACKEND_URL,
   'http://localhost:3000',
   'http://localhost:19006',
-  'exp://192.168.249.233:3000',
-  'http://192.168.249.233:3000',
   'http://localhost:5000',
   'https://rudadatingsite.singles',
-  'https://api.rudadatingsite.singles'
-].filter(Boolean); // Remove any undefined values
+  'https://dating-app-3eba.onrender.com',
+  'exp://192.168.249.233:3000',
+  'http://192.168.249.233:3000',
+].filter(Boolean);
 
-const corsOptions = {
+app.use(cors({
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.some(o => origin.startsWith(o))) {
       callback(null, true);
     } else {
-      console.warn(`⚠️ Blocked by CORS: ${origin}`);
+      console.warn(`❌ CORS blocked origin: ${origin}`);
       callback(new Error('Not allowed by CORS'));
     }
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
-};
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+}));
 
-app.use(cors(corsOptions));
-
-// ==================== HTTPS Redirection (Production Only) ====================
+// ==================== Redirect to HTTPS ====================
 if (IS_PRODUCTION) {
   app.use((req, res, next) => {
     if (req.headers['x-forwarded-proto'] !== 'https') {
@@ -96,72 +83,77 @@ if (IS_PRODUCTION) {
   });
 }
 
-// ==================== Body Parsing Middleware ====================
+// ==================== Parsers ====================
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// ==================== Database Connection ====================
+// ==================== MongoDB Connection ====================
 const connectDB = require('./config/db');
-connectDB();
 
-mongoose.connection.on('connected', () => {
-  console.log('✅ MongoDB connected to:', mongoose.connection.db.databaseName);
-  console.log('📊 MongoDB pinged successfully');
-});
-
-mongoose.connection.on('error', (err) => {
-  console.error('❌ MongoDB connection error:', err.message);
-  if (IS_PRODUCTION) {
-    process.exit(1); // Exit process in production on DB connection failure
-  }
-});
-
-mongoose.connection.on('disconnected', () => {
-  console.warn('⚠️ MongoDB disconnected');
-});
-
-// ==================== Initialize Services ====================
-const initializeServices = async () => {
+// Improved MongoDB connection handling
+const initializeDatabase = async () => {
   try {
-    // Email service is now self-initializing in emailController.js
-    console.log('✅ All services initialized successfully');
+    await connectDB();
+    console.log(`✅ MongoDB connected: ${mongoose.connection.db.databaseName}`);
     return true;
   } catch (err) {
-    console.error('❌ Service initialization failed:', err);
+    console.error(`❌ MongoDB connection error: ${err.message}`);
     if (IS_PRODUCTION) {
-      // Implement production alerting here
-      require('./monitoring').alertServiceInitializationFailed(err);
+      process.exit(1);
     }
-    throw err;
+    return false;
   }
 };
 
-// ==================== Route Imports ====================
-const authRoutes = require('./routes/authRoutes');
-const chatRoutes = require('./routes/chatRoutes');
-const emailRoutes = require('./routes/emailRoutes');
-const matchRoutes = require('./routes/matchRoutes');
-const messageRoutes = require('./routes/messageRoutes');
-const userRoutes = require('./routes/userRoutes');
-const paymentRoutes = require('./routes/paymentRoutes');
-const photoRoutes = require('./routes/photoRoutes');
-const healthRoutes = require('./routes/healthRoutes');
+// ==================== Route Loader ====================
+const loadRoutes = async () => {
+  const routeDefinitions = [
+    { path: '/api/health', module: './routes/healthRoutes' },
+    { path: '/api/auth', module: './routes/authRoutes' },
+    { path: '/api/chat', module: './routes/chatRoutes' },
+    { path: '/api/email', module: './routes/emailRoutes' },
+    { path: '/api/match', module: './routes/matchRoutes' },
+    { path: '/api/message', module: './routes/messageRoutes' },
+    { path: '/api/users', module: './routes/userRoutes' },
+    { path: '/api/payments', module: './routes/paymentRoutes' },
+    { path: '/api/photos', module: './routes/photoRoutes' }
+  ];
 
-// ==================== API Routes ====================
-// Health check route (no authentication)
-app.use('/api/health', healthRoutes);
+  for (const route of routeDefinitions) {
+    try {
+      const routeModule = require(route.module);
+      
+      if (typeof routeModule === 'function' || routeModule instanceof express.Router) {
+        app.use(route.path, routeModule);
+        console.log(`✅ Route ${route.path} loaded successfully`);
+      } else if (routeModule && routeModule.router) {
+        app.use(route.path, routeModule.router);
+        console.log(`✅ Route ${route.path} loaded (object export)`);
+      } else {
+        throw new Error(`Invalid route export in ${route.module}`);
+      }
+    } catch (err) {
+      console.error(`❌ Failed to load route ${route.path}:`, err);
+      if (IS_PRODUCTION) {
+        process.exit(1);
+      }
+    }
+  }
+};
 
-// Main API routes
-app.use('/api/auth', authRoutes);
-app.use('/api/chat', chatRoutes);
-app.use('/api/email', emailRoutes);
-app.use('/api/match', matchRoutes);
-app.use('/api/message', messageRoutes);
-app.use('/api/users', userRoutes);
-app.use('/api/payments', paymentRoutes);
-app.use('/api/photos', photoRoutes);
+// ==================== Email Service Initialization ====================
+let transporter;
+try {
+  transporter = require('./controllers/emailController').transporter;
+  console.log('✅ Email service initialized');
+} catch (err) {
+  console.error('❌ Email service initialization failed:', err.message);
+  if (IS_PRODUCTION) {
+    process.exit(1);
+  }
+}
 
-// ==================== System Monitoring Routes ====================
+// ==================== Monitoring Endpoint ====================
 app.get('/api/system-info', (req, res) => {
   res.json({
     status: 'operational',
@@ -173,28 +165,28 @@ app.get('/api/system-info', (req, res) => {
       memory: {
         total: os.totalmem(),
         free: os.freemem(),
-        used: os.totalmem() - os.freemem()
+        used: os.totalmem() - os.freemem(),
       },
-      cpu: os.cpus().length
+      cpu: os.cpus().length,
     },
     process: {
       pid: process.pid,
       memory: process.memoryUsage(),
       uptime: process.uptime(),
-      version: process.version
+      version: process.version,
     },
     database: {
       status: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
       name: mongoose.connection.db?.databaseName,
-      models: mongoose.modelNames()
+      models: mongoose.modelNames(),
     },
     email: {
-      status: transporter ? 'ready' : 'unavailable'
-    }
+      status: transporter ? 'ready' : 'unavailable',
+    },
   });
 });
 
-// ==================== API Documentation Route ====================
+// ==================== Docs Endpoint ====================
 app.get('/', (req, res) => {
   res.json({
     message: 'Ruda Dating App API',
@@ -203,19 +195,18 @@ app.get('/', (req, res) => {
     environment: process.env.NODE_ENV || 'development',
     timestamp: new Date().toISOString(),
     documentation: IS_PRODUCTION 
-      ? 'https://api.rudadatingsite.singles/docs'
+      ? 'https://dating-app-3eba.onrender.com/docs'
       : `${BACKEND_URL}/api-docs`,
     endpoints: [
       { path: '/api/health', methods: ['GET'], description: 'Health check' },
       { path: '/api/auth', methods: ['POST', 'GET'], description: 'Authentication' },
       { path: '/api/users', methods: ['GET', 'PUT', 'DELETE'], description: 'User management' },
-      { path: '/api/system-info', methods: ['GET'], description: 'System information' }
+      { path: '/api/system-info', methods: ['GET'], description: 'System monitoring' }
     ]
   });
 });
 
-// ==================== Error Handling Middleware ====================
-// 404 Handler
+// ==================== 404 Handler ====================
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -230,38 +221,38 @@ app.use((req, res) => {
   });
 });
 
-// Global error handler
+// ==================== Error Handler ====================
 app.use((err, req, res, next) => {
   const statusCode = err.statusCode || 500;
   const message = IS_PRODUCTION && statusCode === 500 
-    ? 'Internal server error' 
+    ? 'Internal server error'
     : err.message;
 
   console.error(`[${new Date().toISOString()}] Error: ${message}`, {
     url: req.originalUrl,
-    stack: IS_PRODUCTION ? undefined : err.stack
+    stack: IS_PRODUCTION ? undefined : err.stack,
   });
 
   res.status(statusCode).json({
     success: false,
     message,
-    ...(IS_PRODUCTION ? {} : { stack: err.stack })
+    ...(IS_PRODUCTION ? {} : { stack: err.stack }),
   });
 });
 
-// ==================== Socket.IO Configuration ====================
+// ==================== Socket.IO Setup ====================
 const io = new Server(server, {
   cors: {
     origin: allowedOrigins,
     methods: ['GET', 'POST'],
-    credentials: true
+    credentials: true,
   },
   connectionStateRecovery: {
     maxDisconnectionDuration: 2 * 60 * 1000,
-    skipMiddlewares: true
+    skipMiddlewares: true,
   },
   pingTimeout: 60000,
-  pingInterval: 25000
+  pingInterval: 25000,
 });
 
 io.on('connection', (socket) => {
@@ -281,8 +272,8 @@ io.on('connection', (socket) => {
       });
       const savedMessage = await newMessage.save();
       io.to(data.roomId).emit('receiveMessage', savedMessage);
-    } catch (error) {
-      console.error('Socket Error:', error);
+    } catch (err) {
+      console.error('Socket Error:', err);
       socket.emit('error', { message: 'Failed to send message' });
     }
   });
@@ -295,59 +286,58 @@ io.on('connection', (socket) => {
 // ==================== Server Startup ====================
 const startServer = async () => {
   try {
-    await initializeServices();
-    
+    // Initialize database first
+    const dbConnected = await initializeDatabase();
+    if (!dbConnected) {
+      throw new Error('Database connection failed');
+    }
+
+    // Then load routes
+    await loadRoutes();
+
+    // Start the server
     server.listen(PORT, HOST, () => {
       console.log(`
-      🚀 Server running at ${BACKEND_URL}
-      Environment: ${process.env.NODE_ENV || 'development'}
-      MongoDB: ${mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'}
-      Email Service: ${transporter ? 'ready' : 'unavailable'}
-      Process ID: ${process.pid}
+🚀 Server running at ${BACKEND_URL}
+Environment: ${process.env.NODE_ENV || 'development'}
+MongoDB: ${mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'}
+Email Service: ${transporter ? 'ready' : 'unavailable'}
+Process ID: ${process.pid}
       `);
     });
   } catch (err) {
-    console.error('❌ Server startup failed:', err);
+    console.error('❌ Server failed to start:', err);
     process.exit(1);
   }
 };
-
-startServer();
 
 // ==================== Graceful Shutdown ====================
 const shutdown = (signal) => {
   console.log(`🛑 Received ${signal}, shutting down gracefully...`);
-  
-  // Close server first
   server.close(async () => {
     console.log('✅ HTTP server closed');
-    
-    // Close database connection
     await mongoose.connection.close(false);
     console.log('✅ MongoDB connection closed');
-    
-    // Exit process
     process.exit(0);
   });
 
-  // Force shutdown if takes too long
   setTimeout(() => {
-    console.error('⚠️ Forcing shutdown due to timeout');
+    console.error('⚠️ Force shutdown due to timeout');
     process.exit(1);
   }, 10000);
 };
 
+// ==================== Process Event Handlers ====================
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled Rejection:', err);
-  if (IS_PRODUCTION) {
-    process.exit(1);
-  }
+  if (IS_PRODUCTION) process.exit(1);
 });
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
-  if (IS_PRODUCTION) {
-    process.exit(1);
-  }
+  if (IS_PRODUCTION) process.exit(1);
 });
+
+// ==================== Start the Application ====================
+startServer();
