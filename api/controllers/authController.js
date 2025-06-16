@@ -43,18 +43,35 @@ exports.registerUser = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
     // Create and save user
-    const newUser = new User({
+    const newUser = await User.create({
       name,
       email,
       password: hashedPassword
     });
 
-    await newUser.save();
+    // Generate JWT token
+    const token = jwt.sign(
+      { 
+        userId: newUser._id,
+        email: newUser.email
+      },
+      secretKey,
+      { expiresIn: "24h" }
+    );
+
+    // Omit sensitive data from response
+    const userResponse = {
+      id: newUser._id,
+      name: newUser.name,
+      email: newUser.email,
+      createdAt: newUser.createdAt
+    };
 
     res.status(201).json({ 
       success: true,
       message: "Registration successful",
-      userId: newUser._id
+      token,
+      user: userResponse
     });
 
   } catch (error) {
@@ -152,13 +169,56 @@ exports.verifyToken = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, secretKey);
-    req.user = decoded;
+    
+    // Verify user still exists
+    const user = await User.findById(decoded.userId);
+    if (!user) {
+      return res.status(401).json({ 
+        success: false,
+        message: "User not found",
+        code: "USER_NOT_FOUND"
+      });
+    }
+
+    req.user = {
+      id: user._id,
+      email: user.email,
+      role: user.role || 'user'
+    };
+    
     next();
   } catch (error) {
     res.status(401).json({ 
       success: false,
       message: "Invalid or expired token",
       code: "INVALID_TOKEN"
+    });
+  }
+};
+
+// Get Current User
+exports.getCurrentUser = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('-password');
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+        code: "USER_NOT_FOUND"
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      user
+    });
+  } catch (error) {
+    console.error("Get current user error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get user data",
+      code: "SERVER_ERROR"
     });
   }
 };

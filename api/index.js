@@ -173,7 +173,7 @@ const loadRoutes = () => {
     { path: '/api/health', module: './routes/healthRoutes' },
     { path: '/api/auth', module: './routes/authRoutes' },
     { path: '/api/chat', module: './routes/chatRoutes' },
-    { path: '/api/email', module: './routes/emailRoutes' },
+    // { path: '/api/email', module: './routes/emailRoutes' },
     { path: '/api/match', module: './routes/matchRoutes' },
     { path: '/api/message', module: './routes/messageRoutes' },
     { path: '/api/users', module: './routes/userRoutes' },

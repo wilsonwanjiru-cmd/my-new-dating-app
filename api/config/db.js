@@ -2,14 +2,20 @@ const mongoose = require("mongoose");
 require('dotenv').config();
 
 const connectDB = async () => {
-  // Remove deprecated options and add new recommended settings
+  // Enhanced connection options
   const connectionOptions = {
-    serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
-    socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
-    maxPoolSize: 10, // Maintain up to 10 socket connections
+    serverSelectionTimeoutMS: 5000,        // 5 seconds to select server
+    socketTimeoutMS: 45000,               // 45 seconds socket timeout
+    maxPoolSize: 10,                      // Maximum connections in pool
+    minPoolSize: 2,                       // Minimum connections to maintain
+    heartbeatFrequencyMS: 10000,          // Send heartbeat every 10 seconds
+    retryWrites: true,
+    w: 'majority',
+    retryReads: true,
+    connectTimeoutMS: 10000               // 10 seconds connection timeout
   };
 
-  // Set up MongoDB connection event listeners
+  // Connection event listeners
   mongoose.connection.on('connecting', () => {
     console.log('🔄 Connecting to MongoDB...');
   });
@@ -17,52 +23,101 @@ const connectDB = async () => {
   mongoose.connection.on('connected', () => {
     console.log('✅ MongoDB connected successfully');
     console.log(`Database: ${mongoose.connection.db.databaseName}`);
-    console.log(`Models: ${Object.keys(mongoose.connection.models).join(', ')}`);
   });
 
-  mongoose.connection.on('error', (err) => {
-    console.error('❌ MongoDB connection error:', err);
+  mongoose.connection.on('open', () => {
+    console.log('🔓 MongoDB connection is open');
+  });
+
+  mongoose.connection.on('disconnecting', () => {
+    console.log('🔽 MongoDB disconnecting...');
   });
 
   mongoose.connection.on('disconnected', () => {
     console.log('⚠️  MongoDB disconnected');
   });
 
-  // Enable debug mode in development
+  mongoose.connection.on('reconnected', () => {
+    console.log('♻️  MongoDB reconnected');
+  });
+
+  mongoose.connection.on('error', (err) => {
+    console.error('❌ MongoDB connection error:', err.message);
+  });
+
+  // Debugging in development
   if (process.env.NODE_ENV === 'development') {
     mongoose.set('debug', (collectionName, method, query, doc) => {
       console.log(`MongoDB: ${collectionName}.${method}`, {
-        query,
-        doc
+        query: JSON.stringify(query),
+        doc: JSON.stringify(doc)
       });
     });
   }
 
   try {
-    await mongoose.connect(process.env.MONGO_URI, connectionOptions);
+    // Connect with retry logic
+    let attempts = 0;
+    const maxAttempts = 3;
     
-    // Verify the connection is ready
-    await mongoose.connection.db.admin().ping();
-    console.log('📊 MongoDB pinged successfully');
-    
+    while (attempts < maxAttempts) {
+      try {
+        await mongoose.connect(process.env.MONGO_URI, connectionOptions);
+        
+        // Verify connection with ping
+        await mongoose.connection.db.admin().ping();
+        console.log('📊 MongoDB pinged successfully');
+        
+        return;
+      } catch (connectErr) {
+        attempts++;
+        console.error(`❌ Connection attempt ${attempts} failed`, connectErr.message);
+        
+        if (attempts >= maxAttempts) {
+          throw connectErr;
+        }
+        
+        // Exponential backoff
+        const delay = Math.pow(2, attempts) * 1000;
+        console.log(`⏳ Retrying in ${delay/1000} seconds...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
   } catch (err) {
-    console.error('❌ Failed to connect to MongoDB', err);
+    console.error('❌ Failed to connect to MongoDB after retries', err);
     
-    // Graceful shutdown if in production
     if (process.env.NODE_ENV === 'production') {
+      // Graceful shutdown in production
       process.exit(1);
     } else {
-      // In development, you might want to continue with mock data
-      console.warn('⚠️  Continuing in development mode with mock data');
+      // Continue in development with warning
+      console.warn('⚠️  Continuing in development mode with limited functionality');
     }
   }
 };
 
-// Close the Mongoose connection when the Node process ends
-process.on('SIGINT', async () => {
-  await mongoose.connection.close();
-  console.log('MongoDB connection closed due to app termination');
-  process.exit(0);
+// Graceful shutdown handlers
+const gracefulShutdown = async () => {
+  try {
+    await mongoose.connection.close(false); // Force close after timeout
+    console.log('✅ MongoDB connection closed gracefully');
+    process.exit(0);
+  } catch (err) {
+    console.error('❌ Failed to close MongoDB connection', err);
+    process.exit(1);
+  }
+};
+
+process.on('SIGINT', gracefulShutdown);
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGHUP', gracefulShutdown);
+
+// Reconnect on connection loss
+mongoose.connection.on('disconnected', () => {
+  if (process.env.NODE_ENV === 'production') {
+    console.log('🔄 Attempting to reconnect to MongoDB...');
+    setTimeout(() => connectDB(), 5000);
+  }
 });
 
 module.exports = connectDB;
