@@ -14,167 +14,36 @@ import {
   TouchableOpacity
 } from "react-native";
 import React, { useState, useEffect } from "react";
-import { MaterialIcons } from "@expo/vector-icons";
-import { AntDesign, Ionicons } from "@expo/vector-icons";
+import { MaterialIcons, AntDesign, Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as Network from 'expo-network';
-import api from "../../utils/service";
+import axios from "axios";
+import { API_BASE_URL } from '../config';
 
 const Login = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [networkError, setNetworkError] = useState(false);
-  const [connectionDetails, setConnectionDetails] = useState("");
-  const [currentBaseURL, setCurrentBaseURL] = useState(api.defaults.baseURL);
   const [showPassword, setShowPassword] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState("");
   const router = useRouter();
 
   // Configuration
-  const LOCAL_IP = "192.168.89.233";
-  const LOCAL_BACKEND_URL = `http://${LOCAL_IP}:5000`;
-  const PRODUCTION_BACKEND_URL = "https://dating-app-3eba.onrender.com/";
   const CONNECTION_TIMEOUT = 15000;
-  const HEALTH_CHECK_ENDPOINT = "/api/health";
 
   useEffect(() => {
-    const initializeApp = async () => {
+    const checkAuth = async () => {
       try {
-        const networkState = await Network.getNetworkStateAsync();
-        if (!networkState.isConnected) {
-          setNetworkError(true);
-          setConnectionDetails("No network connection detected");
-          return;
-        }
-
-        const lastUsedUrl = await AsyncStorage.getItem("last_used_api_url");
-        const initialUrl = lastUsedUrl || PRODUCTION_BACKEND_URL;
-        
-        api.defaults.baseURL = initialUrl;
-        setCurrentBaseURL(initialUrl);
-
         const token = await AsyncStorage.getItem("auth");
         if (token) {
           router.replace("/(tabs)/profile");
         }
       } catch (error) {
-        console.error("Initialization error:", error);
-        setConnectionDetails("Initialization failed");
+        console.error("Auth check error:", error);
       }
     };
-
-    initializeApp();
+    checkAuth();
   }, []);
-
-  const testConnection = async (url, timeout = 8000) => {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeout);
-      
-      const startTime = Date.now();
-      const response = await fetch(`${url}${HEALTH_CHECK_ENDPOINT}`, {
-        method: 'GET',
-        signal: controller.signal,
-        headers: {
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache'
-        }
-      });
-      const responseTime = Date.now() - startTime;
-      
-      clearTimeout(timeoutId);
-      
-      if (response.ok) {
-        return {
-          success: true,
-          url,
-          status: response.status,
-          responseTime
-        };
-      }
-      return {
-        success: false,
-        url,
-        status: response.status,
-        responseTime
-      };
-    } catch (error) {
-      console.warn(`Connection test failed for ${url}:`, error.message);
-      return {
-        success: false,
-        url,
-        error: error.message
-      };
-    }
-  };
-
-  const handleConnectionFailure = async () => {
-    setConnectionDetails("Attempting to reconnect...");
-    
-    if (__DEV__) {
-      const localTest = await testConnection(LOCAL_BACKEND_URL, 5000);
-      if (localTest.success) {
-        setConnectionDetails(`Connected to local server (${localTest.responseTime}ms)`);
-        api.defaults.baseURL = LOCAL_BACKEND_URL;
-        setCurrentBaseURL(LOCAL_BACKEND_URL);
-        await AsyncStorage.setItem("last_used_api_url", LOCAL_BACKEND_URL);
-        return true;
-      }
-    }
-    
-    const productionTest = await testConnection(PRODUCTION_BACKEND_URL, 10000);
-    if (productionTest.success) {
-      setConnectionDetails(`Connected to production server (${productionTest.responseTime}ms)`);
-      api.defaults.baseURL = PRODUCTION_BACKEND_URL;
-      setCurrentBaseURL(PRODUCTION_BACKEND_URL);
-      await AsyncStorage.setItem("last_used_api_url", PRODUCTION_BACKEND_URL);
-      return true;
-    }
-    
-    setConnectionDetails("All connection attempts failed");
-    return false;
-  };
-
-  const handleLoginError = (error) => {
-    setLoading(false);
-    
-    let errorTitle = "Connection Error";
-    let errorMessage = "An error occurred while trying to connect.";
-    let actions = [{ text: "OK" }];
-
-    if (error.message.includes("NO_INTERNET")) {
-      errorTitle = "Network Unavailable";
-      errorMessage = "Please check your internet connection and try again.";
-    } 
-    else if (error.message.includes("timeout")) {
-      errorTitle = "Connection Timeout";
-      errorMessage = `The server took too long to respond. Please try again.\n\nCurrent endpoint: ${currentBaseURL}`;
-      actions = [
-        { text: "Try Local", onPress: () => {
-          api.defaults.baseURL = LOCAL_BACKEND_URL;
-          setCurrentBaseURL(LOCAL_BACKEND_URL);
-          handleLogin();
-        }},
-        { text: "Retry", onPress: handleLogin }
-      ];
-    }
-    else if (error.response) {
-      errorTitle = "Login Failed";
-      errorMessage = error.response.data?.message || 
-        `Server responded with status ${error.response.status}`;
-      
-      if (error.response.status === 401) {
-        errorMessage = "Invalid email or password. Please try again.";
-      }
-    }
-    else {
-      errorMessage = error.message || "An unexpected error occurred.";
-    }
-
-    Alert.alert(errorTitle, errorMessage, actions);
-    setNetworkError(true);
-  };
 
   const handleLogin = async () => {
     if (!email.trim() || !password.trim()) {
@@ -183,28 +52,11 @@ const Login = () => {
     }
 
     setLoading(true);
-    setNetworkError(false);
+    setConnectionStatus("Connecting to server...");
 
     try {
-      const networkState = await Network.getNetworkStateAsync();
-      if (!networkState.isConnected) {
-        throw new Error("NO_INTERNET: No internet connection");
-      }
-
-      const backendTest = await testConnection(currentBaseURL);
-      if (!backendTest.success) {
-        setConnectionDetails(`Server unreachable (${backendTest.error || 'unknown error'})`);
-        
-        const fallbackConnected = await handleConnectionFailure();
-        if (!fallbackConnected) {
-          throw new Error("BACKEND_UNREACHABLE: All connection attempts failed");
-        }
-      } else {
-        setConnectionDetails(`Connected (${backendTest.responseTime}ms)`);
-      }
-
-      const response = await api.post(
-        "/api/auth/login",
+      const response = await axios.post(
+        `${API_BASE_URL}/api/auth/login`,
         {
           email: email.trim(),
           password: password.trim(),
@@ -212,8 +64,7 @@ const Login = () => {
         {
           headers: { 
             'Content-Type': 'application/json',
-            'X-Connection-Source': 'Mobile-App',
-            'X-Base-URL': currentBaseURL
+            'X-Connection-Source': 'Mobile-App'
           },
           timeout: CONNECTION_TIMEOUT
         }
@@ -221,16 +72,38 @@ const Login = () => {
 
       await AsyncStorage.multiSet([
         ["auth", response.data.token],
-        ["user", JSON.stringify(response.data.user || {})],
-        ["last_used_api_url", currentBaseURL]
+        ["user", JSON.stringify(response.data.user || {})]
       ]);
 
+      setConnectionStatus("Login successful");
       router.replace("/(authenticate)/select");
     } catch (error) {
       handleLoginError(error);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleLoginError = (error) => {
+    let errorMessage = "An error occurred during login.";
+    
+    if (error.response) {
+      // Server responded with error status
+      if (error.response.status === 401) {
+        errorMessage = "Invalid email or password.";
+      } else if (error.response.status >= 500) {
+        errorMessage = "Server error. Please try again later.";
+      }
+      setConnectionStatus(`Server error: ${error.response.status}`);
+    } else if (error.code === 'ECONNABORTED') {
+      errorMessage = "Connection timeout. Please check your internet connection.";
+      setConnectionStatus("Connection timeout");
+    } else {
+      errorMessage = error.message || "Network error occurred.";
+      setConnectionStatus("Network error");
+    }
+
+    Alert.alert("Login Failed", errorMessage);
   };
 
   return (
@@ -256,15 +129,11 @@ const Login = () => {
           contentContainerStyle={styles.scrollContainer}
           keyboardShouldPersistTaps="handled"
         >
-          {networkError && (
-            <View style={styles.networkWarning}>
-              <Text style={styles.networkWarningText}>⚠️ Connection Issue</Text>
-              <Text style={styles.connectionDetailsText}>
-                {connectionDetails}
-                {__DEV__ && `\nCurrent endpoint: ${currentBaseURL}`}
-              </Text>
+          {connectionStatus ? (
+            <View style={styles.connectionStatus}>
+              <Text style={styles.connectionStatusText}>{connectionStatus}</Text>
             </View>
-          )}
+          ) : null}
 
           <View style={styles.titleContainer}>
             <Text style={styles.loginTitle}>Log in to your Account</Text>
@@ -353,24 +222,18 @@ const Login = () => {
               )}
             </Pressable>
 
-            {!loading && (
-              <Pressable
-                onPress={() => router.replace("/register")}
-                style={styles.signUpContainer}
-              >
-                <Text style={styles.signUpText}>
-                  Don't have an account? <Text style={styles.signUpLink}>Sign Up</Text>
-                </Text>
-              </Pressable>
-            )}
+            <Pressable
+              onPress={() => router.replace("/register")}
+              style={styles.signUpContainer}
+            >
+              <Text style={styles.signUpText}>
+                Don't have an account? <Text style={styles.signUpLink}>Sign Up</Text>
+              </Text>
+            </Pressable>
 
-            {__DEV__ && (
-              <View style={styles.debugContainer}>
-                <Text style={styles.debugText}>API Base: {currentBaseURL}</Text>
-                <Text style={styles.debugText}>Connection: {connectionDetails}</Text>
-                <Text style={styles.debugText}>Local IP: {LOCAL_IP}</Text>
-              </View>
-            )}
+            <View style={styles.debugContainer}>
+              <Text style={styles.debugText}>Connected to: {API_BASE_URL}</Text>
+            </View>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -412,25 +275,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 40,
   },
-  networkWarning: {
-    backgroundColor: '#FFF3CD',
+  connectionStatus: {
+    backgroundColor: '#e3f2fd',
     padding: 10,
     borderRadius: 5,
     marginBottom: 10,
-    borderLeftWidth: 5,
-    borderLeftColor: '#FFC107',
   },
-  networkWarningText: {
-    color: '#856404',
-    textAlign: 'center',
-    fontWeight: '500',
-    fontSize: 14,
-  },
-  connectionDetailsText: {
-    color: '#856404',
+  connectionStatusText: {
+    color: '#1976d2',
     textAlign: 'center',
     fontSize: 12,
-    marginTop: 5,
   },
   titleContainer: {
     alignItems: "center",

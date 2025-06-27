@@ -2,3 +2,5 @@
 .env
 logs/
 .env
+# In your .gitignore
+docs/postman/actual-environment.json

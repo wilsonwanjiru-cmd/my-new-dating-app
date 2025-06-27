@@ -1,65 +1,62 @@
 // app/(tabs)/_layout.js
-import React from "react";
-import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import ProfileLayout from "./profile/_layout"; // Import ProfileLayout
-import ChatLayout from "./chat/_layout"; // Import ChatLayout
-import BioLayout from "./bio/_layout"; // Import BioLayout
-
-const Tab = createBottomTabNavigator();
+import { Tabs } from 'expo-router';
+import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { View } from 'react-native';
 
 export default function TabsLayout() {
   return (
-    <Tab.Navigator
+    <Tabs
       screenOptions={{
-        headerShown: false, // Hide the header for all tabs
-        tabBarActiveTintColor: "black", // Color for the active tab icon and label
-        tabBarInactiveTintColor: "gray", // Color for the inactive tab icon and label
+        headerShown: false,
+        tabBarActiveTintColor: 'black',
+        tabBarInactiveTintColor: 'gray',
+        tabBarStyle: {
+          backgroundColor: 'white',
+          borderTopWidth: 0,
+          elevation: 0,
+        },
       }}
     >
       {/* Profile Tab */}
-      <Tab.Screen
-        name="UserProfileTab" // Renamed to avoid conflicts
-        component={ProfileLayout} // Use ProfileLayout
+      <Tabs.Screen
+        name="profile" // Matches the folder name
         options={{
-          title: "Profiles",
-          tabBarIcon: ({ focused }) => (
-            <Feather name="eye" size={24} color={focused ? "black" : "gray"} />
+          title: 'Profiles',
+          tabBarIcon: ({ focused, color }) => (
+            <Feather name="eye" size={24} color={color} />
           ),
         }}
       />
 
       {/* Chat Tab */}
-      <Tab.Screen
-        name="UserChatTab" // Renamed to avoid conflicts
-        component={ChatLayout} // Use ChatLayout
+      <Tabs.Screen
+        name="chat" // Matches the folder name
         options={{
-          title: "Chat",
-          tabBarIcon: ({ focused }) => (
-            <Ionicons
-              name="chatbubble-ellipses-outline"
-              size={24}
-              color={focused ? "black" : "gray"}
+          title: 'Chat',
+          tabBarIcon: ({ focused, color }) => (
+            <Ionicons 
+              name="chatbubble-ellipses-outline" 
+              size={24} 
+              color={color} 
             />
           ),
         }}
       />
 
       {/* Bio Tab */}
-      <Tab.Screen
-        name="UserBioTab" // Renamed to avoid conflicts
-        component={BioLayout} // Use BioLayout
+      <Tabs.Screen
+        name="bio" // Matches the folder name
         options={{
-          title: "Account",
-          tabBarIcon: ({ focused }) => (
-            <MaterialCommunityIcons
-              name="guy-fawkes-mask"
-              size={24}
-              color={focused ? "black" : "gray"}
+          title: 'Account',
+          tabBarIcon: ({ focused, color }) => (
+            <MaterialCommunityIcons 
+              name="guy-fawkes-mask" 
+              size={24} 
+              color={color} 
             />
           ),
         }}
       />
-    </Tab.Navigator>
+    </Tabs>
   );
 }
