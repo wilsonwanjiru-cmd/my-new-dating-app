@@ -26,7 +26,9 @@ const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
   ? process.env.CORS_ALLOWED_ORIGINS.split(',') 
   : [
       'http://localhost:3000',
-      'http://localhost:19006',
+      'http://localhost:19006',  // Expo dev client
+      'http://localhost:8081',  // Your frontend development
+      'exp://192.168.*.*:8081', // Expo local tunnel
       'http://localhost:5000',
       'https://rudadatingsite.singles',
       'https://dating-app-3eba.onrender.com',
@@ -45,7 +47,7 @@ const accessLogStream = rfs.createStream('access.log', {
 
 app.use(morgan(IS_PRODUCTION ? 'combined' : 'dev', {
   stream: IS_PRODUCTION ? accessLogStream : process.stdout,
-  skip: (req) => req.path === '/health' // Skip logging for health checks
+  skip: (req) => req.path === '/health'
 }));
 
 // ==================== Security Middleware ====================
@@ -64,46 +66,69 @@ const apiLimiter = rateLimit({
 });
 app.use('/api', apiLimiter);
 
-// ==================== Enhanced CORS ====================
-app.use(cors({
+// ==================== Enhanced CORS Configuration ====================
+const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.some(o => {
+    // Allow requests with no origin (like mobile apps, curl, Postman)
+    if (!origin && !IS_PRODUCTION) return callback(null, true);
+    
+    // Check against allowed origins
+    if (allowedOrigins.some(o => {
       // Handle wildcard subdomains
       if (o.startsWith('https://*.')) {
         const domain = o.replace('https://*.', '');
         return origin.endsWith(domain);
       }
+      // Handle Expo dev client patterns
+      if (o.includes('exp://') && origin.includes('exp://')) {
+        return true;
+      }
+      // Handle localhost with any port
+      if (o.includes('http://localhost') && origin.includes('http://localhost')) {
+        return true;
+      }
       return origin === o;
     })) {
-      callback(null, true);
-    } else {
-      console.warn(`❌ CORS blocked origin: ${origin}`);
-      callback(new Error('Not allowed by CORS'));
+      return callback(null, true);
     }
+    
+    console.warn(`❌ CORS blocked origin: ${origin}`);
+    callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'X-Requested-With',
+    'Accept',
+    'x-access-token',
+    'x-refresh-token'
+  ],
+  exposedHeaders: ['x-access-token', 'x-refresh-token'],
   maxAge: 86400
-}));
+};
+
+// Apply CORS middleware early in the chain
+app.use(cors(corsOptions));
+
+// Handle preflight requests
+app.options('*', cors(corsOptions));
 
 // ==================== Connection Management ====================
 app.use((req, res, next) => {
-  // Set timeout for all requests
   req.setTimeout(15000, () => {
     console.warn(`Request timeout: ${req.method} ${req.url}`);
   });
   
-  // Set server response timeout
   res.setTimeout(15000, () => {
     console.warn(`Response timeout: ${req.method} ${req.url}`);
   });
   next();
 });
 
-// Keep-alive headers
-server.keepAliveTimeout = 60000; // 60 seconds
-server.headersTimeout = 65000; // 65 seconds
+server.keepAliveTimeout = 60000;
+server.headersTimeout = 65000;
 
 // ==================== HTTPS Redirect ====================
 if (IS_PRODUCTION) {
@@ -136,7 +161,6 @@ const initializeDatabase = async () => {
     await connectDB();
     console.log(`✅ MongoDB connected: ${mongoose.connection.db.databaseName}`);
     
-    // Configure MongoDB connection settings
     mongoose.connection.on('connected', () => {
       console.log('MongoDB connection established');
     });
@@ -153,7 +177,6 @@ const initializeDatabase = async () => {
   } catch (err) {
     console.error(`❌ MongoDB connection error: ${err.message}`);
     if (IS_PRODUCTION) {
-      // Retry connection after delay
       setTimeout(() => process.exit(1), 5000);
     }
     return false;
@@ -162,7 +185,6 @@ const initializeDatabase = async () => {
 
 // ==================== Route Loader ====================
 const loadRoutes = () => {
-  // Clear require cache for routes in development
   if (!IS_PRODUCTION) {
     Object.keys(require.cache).forEach(key => {
       if (key.includes('routes')) delete require.cache[key];
@@ -173,7 +195,6 @@ const loadRoutes = () => {
     { path: '/api/health', module: './routes/healthRoutes' },
     { path: '/api/auth', module: './routes/authRoutes' },
     { path: '/api/chat', module: './routes/chatRoutes' },
-    // { path: '/api/email', module: './routes/emailRoutes' },
     { path: '/api/match', module: './routes/matchRoutes' },
     { path: '/api/message', module: './routes/messageRoutes' },
     { path: '/api/users', module: './routes/userRoutes' },
@@ -183,10 +204,7 @@ const loadRoutes = () => {
 
   routeDefinitions.forEach((route) => {
     try {
-      // Use require for CommonJS modules
       const routeModule = require(route.module);
-      
-      // Check for both default export and direct export
       const router = routeModule.default || routeModule.router || routeModule;
       
       if (typeof router === 'function' || router instanceof express.Router) {
@@ -261,11 +279,7 @@ app.use((err, req, res, next) => {
 
 // ==================== Socket.IO Configuration ====================
 const io = new Server(server, {
-  cors: {
-    origin: allowedOrigins,
-    methods: ['GET', 'POST'],
-    credentials: true
-  },
+  cors: corsOptions,
   connectionStateRecovery: {
     maxDisconnectionDuration: 2 * 60 * 1000,
     skipMiddlewares: true
@@ -307,16 +321,13 @@ const startServer = async () => {
   try {
     console.log('🔄 Starting server initialization...');
     
-    // Initialize database first
     console.log('🔄 Connecting to MongoDB...');
     const dbConnected = await initializeDatabase();
     if (!dbConnected) throw new Error('Database connection failed');
 
-    // Then load routes
     console.log('🔄 Loading routes...');
-    loadRoutes(); // Changed to synchronous loading
+    loadRoutes();
 
-    // Start the server
     server.listen(PORT, HOST, () => {
       console.log(`
 🚀 Server running on port ${PORT}
@@ -325,7 +336,6 @@ MongoDB: ${mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'}
 Process ID: ${process.pid}
       `);
       
-      // Verify server can handle requests
       http.get(`http://localhost:${PORT}/health`, (res) => {
         console.log(`✅ Internal health check: ${res.statusCode}`);
       }).on('error', (err) => {
@@ -335,7 +345,6 @@ Process ID: ${process.pid}
   } catch (err) {
     console.error('❌ Server failed to start:', err);
     
-    // In production, wait before exiting to allow logs to flush
     if (IS_PRODUCTION) {
       setTimeout(() => process.exit(1), 5000);
     } else {
@@ -354,7 +363,6 @@ process.on('SIGTERM', () => {
     });
   });
   
-  // Force shutdown after timeout
   setTimeout(() => {
     console.error('⚠️ Force shutdown due to timeout');
     process.exit(1);
@@ -374,7 +382,6 @@ process.on('SIGINT', () => {
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled Rejection:', err);
   if (IS_PRODUCTION) {
-    // Don't exit immediately - try to keep running
     console.error('Continuing despite unhandled rejection');
   }
 });
@@ -382,7 +389,6 @@ process.on('unhandledRejection', (err) => {
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
   if (IS_PRODUCTION) {
-    // Don't exit immediately - try to keep running
     console.error('Continuing despite uncaught exception');
   }
 });
@@ -400,7 +406,6 @@ if (IS_PRODUCTION) {
       heapUsed: `${(memoryUsage.heapUsed / 1024 / 1024).toFixed(2)} MB`
     });
     
-    // Check event loop latency
     const start = process.hrtime();
     setTimeout(() => {
       const delta = process.hrtime(start);

@@ -2,6 +2,7 @@
   "expo": {
     "name": "ruda-dating",
     "slug": "ruda-dating",
+    "owner": "your-expo-username",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -18,9 +19,7 @@
     "extra": {
       "environment": "production",
       "apiUrl": "https://dating-app-3eba.onrender.com",
-      "eas": {
-        "projectId": "your-project-id-here"
-      }
+      "eas": {}
     },
     "runtimeVersion": {
       "policy": "appVersion"
@@ -42,7 +41,10 @@
         "NSPhotoLibraryUsageDescription": "Allow $(PRODUCT_NAME) to access your photos",
         "NSCameraUsageDescription": "Allow $(PRODUCT_NAME) to access your camera",
         "NSMicrophoneUsageDescription": "Allow $(PRODUCT_NAME) to access your microphone",
-        "NSPhotoLibraryAddUsageDescription": "Allow $(PRODUCT_NAME) to save photos"
+        "NSPhotoLibraryAddUsageDescription": "Allow $(PRODUCT_NAME) to save photos",
+        "UIBackgroundModes": [
+          "remote-notification"
+        ]
       }
     },
     "android": {
@@ -53,27 +55,19 @@
       "package": "com.yourcompany.rudadating",
       "versionCode": 1,
       "permissions": [
-        "android.permission.CAMERA",
-        "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.RECORD_AUDIO"
-      ],
-      "softwareKeyboardLayoutMode": "pan",
-      "permissions": [
         "CAMERA",
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE",
-        "RECORD_AUDIO"
-      ]
+        "RECORD_AUDIO",
+        "FOREGROUND_SERVICE",
+        "POST_NOTIFICATIONS"
+      ],
+      "softwareKeyboardLayoutMode": "pan",
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "favicon": "./assets/favicon.png",
-      "bundler": "metro",
-      "config": {
-        "serviceWorker": {
-          "source": "./service-worker.js"
-        }
-      }
+      "bundler": "metro"
     },
     "plugins": [
       "expo-router",
@@ -81,10 +75,10 @@
         "expo-build-properties",
         {
           "android": {
-            "compileSdkVersion": 33,
-            "targetSdkVersion": 33,
-            "buildToolsVersion": "33.0.0",
-            "kotlinVersion": "1.7.0"
+            "compileSdkVersion": 34,
+            "targetSdkVersion": 34,
+            "buildToolsVersion": "34.0.0",
+            "kotlinVersion": "1.8.0"
           },
           "ios": {
             "deploymentTarget": "15.1",
@@ -105,7 +99,16 @@
         {
           "icon": "./assets/notification-icon.png",
           "color": "#ffffff",
-          "sounds": ["./assets/notification-sound.wav"]
+          "sounds": [
+            "./assets/notification-sound.wav"
+          ],
+          "mode": "production"
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow $(PRODUCT_NAME) to use your location"
         }
       ]
     ],
@@ -126,6 +129,18 @@
       "iosDisplayInForeground": true,
       "androidMode": "default",
       "androidCollapsedTitle": "#{unread_notifications} new interactions"
+    },
+    "hooks": {
+      "postPublish": [
+        {
+          "file": "sentry-expo/upload-sourcemaps",
+          "config": {
+            "organization": "your-sentry-org",
+            "project": "your-sentry-project",
+            "authToken": "your-sentry-auth-token"
+          }
+        }
+      ]
     }
   }
 }

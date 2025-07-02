@@ -1,5 +1,9 @@
+// ✅ Import dependencies
 const express = require("express");
+const mongoose = require("mongoose");
 const router = express.Router();
+
+// ✅ Import controllers
 const {
   updateGender,
   updateDescription,
@@ -19,7 +23,7 @@ const {
 
 const matchController = require("../controllers/matchController");
 
-// Input validation middleware
+// ✅ Input validation middleware
 const validateUserId = (req, res, next) => {
   if (!req.params.userId || !mongoose.Types.ObjectId.isValid(req.params.userId)) {
     return res.status(400).json({ success: false, message: "Invalid user ID" });
@@ -27,7 +31,7 @@ const validateUserId = (req, res, next) => {
   next();
 };
 
-// Route definitions
+// ✅ User profile routes
 router.route("/:userId/gender")
   .put(validateUserId, updateGender);
 
@@ -41,10 +45,6 @@ router.route("/:userId")
 router.route("/:userId/profile-images")
   .put(validateUserId, updateUserProfileImages)
   .post(validateUserId, addProfileImage);
-
-router.route("/:userId/crush")
-  .put(validateUserId, addCrush)
-  .delete(validateUserId, removeCrush);
 
 router.route("/:userId/preferences")
   .put(validateUserId, updateUserPreferences);
@@ -64,7 +64,12 @@ router.route("/:userId/looking-for/remove")
 router.route("/received-likes/:userId/details")
   .get(validateUserId, getReceivedLikesDetails);
 
-// Match-related routes
+// ✅ Crush routes
+router.route("/:userId/crush")
+  .put(validateUserId, addCrush)
+  .delete(validateUserId, removeCrush);
+
+// ✅ Match routes
 router.route("/match")
   .post(matchController.createMatch);
 
@@ -77,4 +82,5 @@ router.route("/:userId/crushes")
 router.route("/unmatch")
   .post(matchController.unmatch);
 
+// ✅ Export the router
 module.exports = router;
