@@ -1,18 +1,31 @@
 const mongoose = require("mongoose");
 require('dotenv').config();
 
+// Connection state tracking
+let isConnected = false;
+let isConnecting = false;
+
 const connectDB = async () => {
+  // Prevent multiple connection attempts
+  if (isConnected) return mongoose.connection;
+  if (isConnecting) {
+    console.log('⏳ Connection attempt already in progress');
+    return mongoose.connection;
+  }
+
+  isConnecting = true;
+
   // Enhanced connection options
   const connectionOptions = {
-    serverSelectionTimeoutMS: 5000,        // 5 seconds to select server
-    socketTimeoutMS: 45000,               // 45 seconds socket timeout
-    maxPoolSize: 10,                      // Maximum connections in pool
-    minPoolSize: 2,                       // Minimum connections to maintain
-    heartbeatFrequencyMS: 10000,          // Send heartbeat every 10 seconds
+    serverSelectionTimeoutMS: 10000,
+    socketTimeoutMS: 45000,
+    maxPoolSize: 50,
+    minPoolSize: 5,
+    heartbeatFrequencyMS: 10000,
     retryWrites: true,
     w: 'majority',
     retryReads: true,
-    connectTimeoutMS: 10000               // 10 seconds connection timeout
+    connectTimeoutMS: 30000
   };
 
   // Connection event listeners
@@ -21,8 +34,12 @@ const connectDB = async () => {
   });
 
   mongoose.connection.on('connected', () => {
+    isConnected = true;
+    isConnecting = false;
     console.log('✅ MongoDB connected successfully');
     console.log(`Database: ${mongoose.connection.db.databaseName}`);
+    console.log(`Host: ${mongoose.connection.host}`);
+    console.log(`Port: ${mongoose.connection.port}`);
   });
 
   mongoose.connection.on('open', () => {
@@ -34,10 +51,12 @@ const connectDB = async () => {
   });
 
   mongoose.connection.on('disconnected', () => {
+    isConnected = false;
     console.log('⚠️  MongoDB disconnected');
   });
 
   mongoose.connection.on('reconnected', () => {
+    isConnected = true;
     console.log('♻️  MongoDB reconnected');
   });
 
@@ -56,68 +75,104 @@ const connectDB = async () => {
   }
 
   try {
-    // Connect with retry logic
+    // Connect with enhanced retry logic
     let attempts = 0;
-    const maxAttempts = 3;
+    const maxAttempts = 5;
+    const initialDelay = 1000; // 1 second
     
     while (attempts < maxAttempts) {
       try {
+        console.log(`Attempt ${attempts + 1} of ${maxAttempts}`);
         await mongoose.connect(process.env.MONGO_URI, connectionOptions);
         
         // Verify connection with ping
-        await mongoose.connection.db.admin().ping();
-        console.log('📊 MongoDB pinged successfully');
+        const pingResult = await mongoose.connection.db.admin().ping();
+        console.log('📊 MongoDB pinged successfully:', pingResult);
         
-        return;
+        // Set up indexes after successful connection
+        await setupIndexes();
+        
+        return mongoose.connection;
       } catch (connectErr) {
         attempts++;
         console.error(`❌ Connection attempt ${attempts} failed`, connectErr.message);
         
         if (attempts >= maxAttempts) {
-          throw connectErr;
+          throw new Error(`Failed to connect after ${maxAttempts} attempts: ${connectErr.message}`);
         }
         
-        // Exponential backoff
-        const delay = Math.pow(2, attempts) * 1000;
-        console.log(`⏳ Retrying in ${delay/1000} seconds...`);
+        // Exponential backoff with jitter
+        const delay = Math.min(initialDelay * Math.pow(2, attempts), 30000) + Math.random() * 1000;
+        console.log(`⏳ Retrying in ${Math.round(delay/1000)} seconds...`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
   } catch (err) {
-    console.error('❌ Failed to connect to MongoDB after retries', err);
+    isConnecting = false;
+    console.error('❌ Critical MongoDB connection failure:', err);
     
     if (process.env.NODE_ENV === 'production') {
       // Graceful shutdown in production
+      console.error('🚨 Application shutting down due to database connection failure');
       process.exit(1);
-    } else {
-      // Continue in development with warning
-      console.warn('⚠️  Continuing in development mode with limited functionality');
     }
+    throw err;
+  } finally {
+    isConnecting = false;
   }
 };
 
-// Graceful shutdown handlers
-const gracefulShutdown = async () => {
+// Database indexes setup
+async function setupIndexes() {
   try {
-    await mongoose.connection.close(false); // Force close after timeout
+    // Create your indexes here
+    await mongoose.connection.collection('users').createIndex({ email: 1 }, { unique: true, background: true });
+    await mongoose.connection.collection('chats').createIndex(
+      { senderId: 1, receiverId: 1, timestamp: -1 }, 
+      { background: true }
+    );
+    console.log('🔍 Database indexes verified/created');
+  } catch (indexError) {
+    console.error('❌ Failed to create indexes:', indexError);
+  }
+}
+
+// Graceful shutdown handlers
+const gracefulShutdown = async (signal) => {
+  console.log(`\n🛑 Received ${signal}, closing MongoDB connection...`);
+  try {
+    await mongoose.connection.close(false);
     console.log('✅ MongoDB connection closed gracefully');
     process.exit(0);
   } catch (err) {
-    console.error('❌ Failed to close MongoDB connection', err);
+    console.error('❌ Failed to close MongoDB connection gracefully:', err);
     process.exit(1);
   }
 };
 
-process.on('SIGINT', gracefulShutdown);
-process.on('SIGTERM', gracefulShutdown);
-process.on('SIGHUP', gracefulShutdown);
+// Handle different shutdown signals
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGHUP', () => gracefulShutdown('SIGHUP'));
 
-// Reconnect on connection loss
+// Automatic reconnection in production
 mongoose.connection.on('disconnected', () => {
-  if (process.env.NODE_ENV === 'production') {
+  if (process.env.NODE_ENV === 'production' && !isConnecting) {
     console.log('🔄 Attempting to reconnect to MongoDB...');
-    setTimeout(() => connectDB(), 5000);
+    setTimeout(() => {
+      if (!isConnected && !isConnecting) {
+        connectDB().catch(err => {
+          console.error('❌ Automatic reconnection failed:', err.message);
+        });
+      }
+    }, 5000);
   }
 });
 
-module.exports = connectDB;
+// Export as an object with named exports
+module.exports = {
+  connectDB,
+  connection: mongoose.connection,
+  gracefulShutdown,
+  setupIndexes
+};
