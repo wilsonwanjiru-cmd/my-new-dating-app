@@ -8,7 +8,7 @@ router.use((req, res, next) => {
     'Cache-Control': 'no-store, no-cache, must-revalidate',
     'Pragma': 'no-cache',
     'X-Content-Type-Options': 'nosniff',
-    'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+    'Strict-Transport-Security': process.env.NODE_ENV === 'production' ? 'max-age=31536000; includeSubDomains' : '',
     'X-Frame-Options': 'DENY',
     'X-XSS-Protection': '1; mode=block'
   });
@@ -20,7 +20,12 @@ const rateLimit = require('express-rate-limit');
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many health check requests from this IP, please try again later'
+  handler: (req, res) => {
+    res.status(429).json({
+      success: false,
+      message: 'Too many health check requests from this IP, please try again later'
+    });
+  }
 });
 
 // ==================== Health Endpoints ====================
@@ -32,19 +37,35 @@ const apiLimiter = rateLimit({
  *     summary: Comprehensive health check
  *     description: Returns the complete health status of the application including database, services and system metrics
  *     tags: [Health]
- *     parameters:
- *       - in: query
- *         name: deep
- *         schema:
- *           type: boolean
- *         description: Whether to perform deep checks of external services
  *     responses:
  *       200:
  *         description: Application is healthy
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   type: object
  *       500:
  *         description: Application is unhealthy
  */
-router.get('/', apiLimiter, HealthController.healthCheck);
+router.get('/', apiLimiter, async (req, res, next) => {
+  try {
+    await HealthController.healthCheck(req, res, next);
+  } catch (error) {
+    console.error('Health check error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Health check failed',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
 
 /**
  * @swagger
@@ -56,8 +77,27 @@ router.get('/', apiLimiter, HealthController.healthCheck);
  *     responses:
  *       200:
  *         description: Application is alive
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
  */
-router.get('/liveness', HealthController.liveness);
+router.get('/liveness', (req, res) => {
+  try {
+    HealthController.liveness(req, res);
+  } catch (error) {
+    console.error('Liveness check error:', error);
+    res.status(200).json({  // Liveness should always return 200 if process is running
+      success: true,
+      message: 'Process is running but encountered an error'
+    });
+  }
+});
 
 /**
  * @swagger
@@ -72,7 +112,18 @@ router.get('/liveness', HealthController.liveness);
  *       503:
  *         description: Application is not ready
  */
-router.get('/readiness', HealthController.readiness);
+router.get('/readiness', async (req, res) => {
+  try {
+    await HealthController.readiness(req, res);
+  } catch (error) {
+    console.error('Readiness check error:', error);
+    res.status(503).json({
+      success: false,
+      message: 'Service not ready',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
 
 /**
  * @swagger
@@ -85,42 +136,22 @@ router.get('/readiness', HealthController.readiness);
  *       200:
  *         description: Successful ping response
  */
-router.get('/ping', HealthController.ping);
+router.get('/ping', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'pong',
+    timestamp: new Date().toISOString()
+  });
+});
 
-/**
- * @swagger
- * /api/health/metrics:
- *   get:
- *     summary: Application metrics
- *     description: Returns Prometheus formatted metrics
- *     tags: [Health]
- *     responses:
- *       200:
- *         description: Metrics data
- *         content:
- *           text/plain:
- *             schema:
- *               type: string
- */
-router.get('/metrics', HealthController.getMetrics);
-
-/**
- * @swagger
- * /api/health/history:
- *   get:
- *     summary: Health check history
- *     description: Returns the last 10 health check results
- *     tags: [Health]
- *     responses:
- *       200:
- *         description: Health check history
- */
-router.get('/history', HealthController.getHistory);
-
-// ==================== Deep Check Endpoint ====================
-router.get('/deep-check', apiLimiter, (req, res, next) => {
-  req.query.deep = 'true';
-  next();
-}, HealthController.healthCheck);
+// ==================== Error Handling Middleware ====================
+router.use((err, req, res, next) => {
+  console.error('Health route error:', err);
+  res.status(500).json({
+    success: false,
+    message: 'Internal health check error',
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
+});
 
 module.exports = router;
