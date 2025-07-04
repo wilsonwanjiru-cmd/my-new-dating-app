@@ -1,156 +1,163 @@
 const express = require('express');
 const router = express.Router();
-const HealthController = require('../controllers/healthController');
+const mongoose = require('mongoose');
+const os = require('os');
 
-// ==================== Security Headers Middleware ====================
-router.use((req, res, next) => {
-  res.set({
-    'Cache-Control': 'no-store, no-cache, must-revalidate',
-    'Pragma': 'no-cache',
-    'X-Content-Type-Options': 'nosniff',
-    'Strict-Transport-Security': process.env.NODE_ENV === 'production' ? 'max-age=31536000; includeSubDomains' : '',
-    'X-Frame-Options': 'DENY',
-    'X-XSS-Protection': '1; mode=block'
-  });
-  next();
-});
+// ==================== Utility Functions ====================
+const formatBytes = (bytes) => {
+  if (!bytes) return '0 Bytes';
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return parseFloat((bytes / Math.pow(1024, i)).toFixed(2)) + ' ' + sizes[i];
+};
 
-// ==================== Rate Limiting ====================
-const rateLimit = require('express-rate-limit');
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  handler: (req, res) => {
-    res.status(429).json({
-      success: false,
-      message: 'Too many health check requests from this IP, please try again later'
-    });
-  }
-});
-
-// ==================== Health Endpoints ====================
-
+// ==================== /api/health ====================
 /**
  * @swagger
  * /api/health:
  *   get:
  *     summary: Comprehensive health check
- *     description: Returns the complete health status of the application including database, services and system metrics
+ *     description: Returns application health status
  *     tags: [Health]
  *     responses:
  *       200:
- *         description: Application is healthy
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 message:
- *                   type: string
- *                 data:
- *                   type: object
- *       500:
- *         description: Application is unhealthy
+ *         description: Application status
  */
-router.get('/', apiLimiter, async (req, res, next) => {
+router.get('/', async (req, res) => {
   try {
-    await HealthController.healthCheck(req, res, next);
+    let dbPing = false;
+    try {
+      await mongoose.connection.db.admin().ping();
+      dbPing = true;
+    } catch (pingError) {
+      console.warn('MongoDB ping failed:', pingError.message);
+    }
+
+    const memoryUsage = process.memoryUsage();
+    const cpuInfo = os.cpus();
+
+    const healthData = {
+      status: dbPing ? 'healthy' : 'degraded',
+      timestamp: new Date().toISOString(),
+      uptime: `${Math.floor(process.uptime())}s`,
+      environment: process.env.NODE_ENV || 'development',
+      database: {
+        connectionState: mongoose.STATES[mongoose.connection.readyState] || 'disconnected',
+        ping: dbPing,
+        dbName: mongoose.connection.db?.databaseName || 'N/A'
+      },
+      system: {
+        memory: {
+          rss: formatBytes(memoryUsage.rss),
+          heapTotal: formatBytes(memoryUsage.heapTotal),
+          heapUsed: formatBytes(memoryUsage.heapUsed),
+        },
+        cpu: {
+          count: cpuInfo.length,
+          model: cpuInfo[0]?.model,
+          speed: `${cpuInfo[0]?.speed} MHz`
+        },
+        platform: os.platform(),
+        loadAverage: os.loadavg().map(l => l.toFixed(2))
+      },
+      process: {
+        pid: process.pid,
+        node: process.version
+      }
+    };
+
+    res.status(200).json(healthData);
   } catch (error) {
     console.error('Health check error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Health check failed',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    res.status(200).json({
+      status: 'degraded',
+      message: 'Health check partially failed',
+      timestamp: new Date().toISOString()
     });
   }
 });
 
+// ==================== /api/health/liveness ====================
 /**
  * @swagger
  * /api/health/liveness:
  *   get:
  *     summary: Liveness probe
- *     description: Simple check if the application is running
+ *     description: Simple check if application is running
  *     tags: [Health]
  *     responses:
  *       200:
  *         description: Application is alive
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 message:
- *                   type: string
  */
 router.get('/liveness', (req, res) => {
-  try {
-    HealthController.liveness(req, res);
-  } catch (error) {
-    console.error('Liveness check error:', error);
-    res.status(200).json({  // Liveness should always return 200 if process is running
-      success: true,
-      message: 'Process is running but encountered an error'
-    });
-  }
+  res.status(200).json({
+    status: 'alive',
+    timestamp: new Date().toISOString(),
+    processId: process.pid
+  });
 });
 
+// ==================== /api/health/readiness ====================
 /**
  * @swagger
  * /api/health/readiness:
  *   get:
  *     summary: Readiness probe
- *     description: Check if the application is ready to handle traffic
+ *     description: Check if application can handle requests
  *     tags: [Health]
  *     responses:
  *       200:
  *         description: Application is ready
  *       503:
- *         description: Application is not ready
+ *         description: Application not ready
  */
 router.get('/readiness', async (req, res) => {
   try {
-    await HealthController.readiness(req, res);
+    let dbReady = false;
+    try {
+      await mongoose.connection.db.admin().ping();
+      dbReady = true;
+    } catch (err) {
+      console.warn('Readiness ping failed:', err.message);
+    }
+
+    const ready = dbReady && mongoose.connection.readyState === 1;
+
+    res.status(ready ? 200 : 503).json({
+      status: ready ? 'ready' : 'not ready',
+      timestamp: new Date().toISOString(),
+      database: {
+        connectionState: mongoose.STATES[mongoose.connection.readyState] || 'disconnected',
+        ping: dbReady
+      }
+    });
   } catch (error) {
     console.error('Readiness check error:', error);
     res.status(503).json({
-      success: false,
-      message: 'Service not ready',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      status: 'not ready',
+      message: 'Readiness check failed',
+      timestamp: new Date().toISOString()
     });
   }
 });
 
+// ==================== /api/health/ping ====================
 /**
  * @swagger
  * /api/health/ping:
  *   get:
  *     summary: Simple ping
- *     description: Returns a simple pong response
+ *     description: Returns pong response
  *     tags: [Health]
  *     responses:
  *       200:
- *         description: Successful ping response
+ *         description: Pong response
  */
 router.get('/ping', (req, res) => {
   res.status(200).json({
-    success: true,
+    status: 'success',
     message: 'pong',
     timestamp: new Date().toISOString()
-  });
-});
-
-// ==================== Error Handling Middleware ====================
-router.use((err, req, res, next) => {
-  console.error('Health route error:', err);
-  res.status(500).json({
-    success: false,
-    message: 'Internal health check error',
-    error: process.env.NODE_ENV === 'development' ? err.message : undefined
   });
 });
 
