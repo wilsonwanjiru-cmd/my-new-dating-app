@@ -1,86 +1,193 @@
-// ✅ Import dependencies
 const express = require("express");
-const mongoose = require("mongoose");
 const router = express.Router();
+const path = require("path");
+const ValidateRequest = require("../middlewares/validateRequest");
 
-// ✅ Import controllers
-const {
-  updateGender,
-  updateDescription,
-  fetchUserDetails,
-  updateUserProfileImages,
-  addCrush,
-  removeCrush,
-  updateUserPreferences,
-  deleteUserAccount,
-  addProfileImage,
-  addTurnOn,
-  removeTurnOn,
-  addLookingFor,
-  removeLookingFor,
-  getReceivedLikesDetails,
-} = require("../controllers/userController");
-
-const matchController = require("../controllers/matchController");
-
-// ✅ Input validation middleware
-const validateUserId = (req, res, next) => {
-  if (!req.params.userId || !mongoose.Types.ObjectId.isValid(req.params.userId)) {
-    return res.status(400).json({ success: false, message: "Invalid user ID" });
+// Enhanced controller loader with verification and caching
+const loadController = (controllerName) => {
+  const controllerPath = path.resolve(__dirname, `../controllers/${controllerName}`);
+  try {
+    delete require.cache[require.resolve(controllerPath)];
+    const controller = require(controllerPath);
+    const methods = Object.getOwnPropertyNames(Object.getPrototypeOf(controller))
+      .filter(key => key !== 'constructor' && typeof controller[key] === 'function');
+    if (!methods.length) throw new Error(`No valid methods found in ${controllerName}`);
+    console.log(`✅ ${controllerName} methods verified:`, methods);
+    return controller;
+  } catch (error) {
+    console.error(`❌ Critical error loading ${controllerName}:`, error.message);
+    throw error;
   }
-  next();
 };
 
-// ✅ User profile routes
-router.route("/:userId/gender")
-  .put(validateUserId, updateGender);
+// Load controllers
+let UserController, MatchController;
+try {
+  UserController = loadController("userController");
+  MatchController = loadController("matchController");
+} catch (error) {
+  process.exit(1);
+}
 
-router.route("/:userId/description")
-  .put(validateUserId, updateDescription);
+// Method validator
+const verifyMethod = (controller, methodName) => {
+  if (!controller) throw new Error(`Controller is undefined`);
+  const fn = controller[methodName];
+  if (typeof fn !== 'function') {
+    throw new Error(`Controller method "${methodName}" is missing or not a function`);
+  }
+  return fn;
+};
 
-router.route("/:userId")
-  .get(validateUserId, fetchUserDetails)
-  .delete(validateUserId, deleteUserAccount);
+// Route creator
+const createRoute = (handler, ...middlewares) => {
+  const validated = middlewares.map(mw => {
+    if (typeof mw !== 'function') throw new Error(`Invalid middleware: ${mw}`);
+    return mw;
+  });
+  if (typeof handler !== 'function') throw new Error(`Invalid handler: ${typeof handler}`);
+  return [...validated, handler];
+};
 
-router.route("/:userId/profile-images")
-  .put(validateUserId, updateUserProfileImages)
-  .post(validateUserId, addProfileImage);
+// ========== User Profile ==========
+router.get("/:userId",
+  ...createRoute(
+    verifyMethod(UserController, 'fetchUserDetails'),
+    ValidateRequest.validateObjectId
+  )
+);
 
-router.route("/:userId/preferences")
-  .put(validateUserId, updateUserPreferences);
+router.get("/:userId/description",
+  ...createRoute(
+    verifyMethod(UserController, 'getDescription'),
+    ValidateRequest.validateObjectId
+  )
+);
 
-router.route("/:userId/turn-ons/add")
-  .put(validateUserId, addTurnOn);
+router.put("/:userId/description",
+  ...createRoute(
+    verifyMethod(UserController, 'updateDescription'),
+    ValidateRequest.validateObjectId,
+    ValidateRequest.validateDescriptionUpdate
+  )
+);
 
-router.route("/:userId/turn-ons/remove")
-  .put(validateUserId, removeTurnOn);
+// ========== Profile Management ==========
+const profileRoutes = express.Router({ mergeParams: true });
 
-router.route("/:userId/looking-for")
-  .put(validateUserId, addLookingFor);
+profileRoutes.put("/gender",
+  ...createRoute(
+    verifyMethod(UserController, 'updateGender'),
+    ValidateRequest.validateGenderUpdate
+  )
+);
 
-router.route("/:userId/looking-for/remove")
-  .put(validateUserId, removeLookingFor);
+profileRoutes.put("/profile-images",
+  ...createRoute(
+    verifyMethod(UserController, 'updateUserProfileImages'),
+    ValidateRequest.validateProfileImages
+  )
+);
 
-router.route("/received-likes/:userId/details")
-  .get(validateUserId, getReceivedLikesDetails);
+profileRoutes.post("/profile-images",
+  ...createRoute(
+    verifyMethod(UserController, 'addProfileImage'),
+    ValidateRequest.validateProfileImages
+  )
+);
 
-// ✅ Crush routes
-router.route("/:userId/crush")
-  .put(validateUserId, addCrush)
-  .delete(validateUserId, removeCrush);
+// ========== Preferences ==========
+const preferenceRoutes = express.Router({ mergeParams: true });
 
-// ✅ Match routes
-router.route("/match")
-  .post(matchController.createMatch);
+preferenceRoutes.put("/",
+  ...createRoute(
+    verifyMethod(UserController, 'updateUserPreferences'),
+    ValidateRequest.validateUserPreferences
+  )
+);
 
-router.route("/:userId/matches")
-  .get(validateUserId, matchController.getMatches);
+preferenceRoutes.put("/turn-ons/add",
+  ...createRoute(
+    verifyMethod(UserController, 'addTurnOn'),
+    ValidateRequest.validateTurnOnInput
+  )
+);
 
-router.route("/:userId/crushes")
-  .get(validateUserId, matchController.getCrushes);
+preferenceRoutes.put("/turn-ons/remove",
+  ...createRoute(
+    verifyMethod(UserController, 'removeTurnOn'),
+    ValidateRequest.validateTurnOnInput
+  )
+);
 
-router.route("/unmatch")
-  .post(matchController.unmatch);
+// ========== Match Features ==========
+const matchRoutes = express.Router({ mergeParams: true });
 
-// ✅ Export the router
+matchRoutes.put("/crush",
+  ...createRoute(
+    verifyMethod(UserController, 'addCrush'),
+    ValidateRequest.validateCrushId
+  )
+);
+
+matchRoutes.delete("/crush",
+  ...createRoute(
+    verifyMethod(UserController, 'removeCrush'),
+    ValidateRequest.validateCrushId
+  )
+);
+
+matchRoutes.get("/matches",
+  ...createRoute(
+    verifyMethod(MatchController, 'getMatches')
+  )
+);
+
+matchRoutes.get("/crushes",
+  ...createRoute(
+    verifyMethod(MatchController, 'getCrushes')
+  )
+);
+
+// ========== Nested Routes Mount ==========
+router.use("/:userId",
+  ValidateRequest.validateObjectId,
+  profileRoutes,
+  preferenceRoutes,
+  matchRoutes
+);
+
+// ========== Global Match Routes ==========
+router.post("/match",
+  ...createRoute(
+    verifyMethod(MatchController, 'createMatch'),
+    ValidateRequest.validateBodyObjectId(['userAId', 'userBId']) // example usage
+  )
+);
+
+router.post("/unmatch",
+  ...createRoute(
+    verifyMethod(MatchController, 'unmatch'),
+    ValidateRequest.validateBodyObjectId(['userAId', 'userBId']) // example usage
+  )
+);
+
+// ========== Account ==========
+router.delete("/:userId",
+  ...createRoute(
+    verifyMethod(UserController, 'deleteUserAccount'),
+    ValidateRequest.validateObjectId
+  )
+);
+
+// ========== Error Middleware ==========
+router.use((err, req, res, next) => {
+  console.error('❌ Route error:', err.message);
+  res.status(500).json({
+    success: false,
+    error: 'Internal server error',
+    details: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
+});
+
 module.exports = router;

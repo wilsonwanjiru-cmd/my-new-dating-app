@@ -12,12 +12,12 @@ const morgan = require('morgan');
 const app = express();
 const server = http.createServer(app);
 
-// ==================== Configuration ====================
+// ==================== Config ====================
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const PORT = parseInt(process.env.PORT) || 5000;
 const HOST = process.env.HOST || '0.0.0.0';
 
-// ==================== Error Handling Setup ====================
+// ==================== Error Handlers ====================
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
@@ -27,7 +27,7 @@ process.on('uncaughtException', (err) => {
   if (!IS_PRODUCTION) process.exit(1);
 });
 
-// ==================== DB Connection ====================
+// ==================== DB Connect ====================
 const { connectDB } = require('./config/db');
 
 // ==================== Middleware ====================
@@ -61,14 +61,17 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 
+// ==================== Logging ====================
 const logDirectory = path.join(__dirname, 'logs');
 if (!fs.existsSync(logDirectory)) fs.mkdirSync(logDirectory);
 const accessLogStream = fs.createWriteStream(path.join(logDirectory, 'access.log'), { flags: 'a' });
+
 app.use(morgan(IS_PRODUCTION ? 'combined' : 'dev', {
   stream: IS_PRODUCTION ? accessLogStream : process.stdout,
   skip: (req) => req.path.startsWith('/health')
 }));
 
+// ==================== Rate Limiting ====================
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
@@ -81,34 +84,35 @@ const apiLimiter = rateLimit({
 });
 app.use('/api', apiLimiter);
 
-// ==================== Load Routes ====================
-const loadRoutes = async () => {
-  try {
-    // ✅ Mount health route correctly under /api/health
-    const healthRouter = require('./routes/healthRoutes');
-    app.use('/api/health', healthRouter);
+// ==================== Enhanced Route Loader ====================
+const loadRoutesSafely = async () => {
+  const routePaths = {
+    '/api/health': './routes/healthRoutes',
+    '/api/auth': './routes/authRoutes',
+    '/api/users': './routes/userRoutes',
+    '/api/chat': './routes/chatRoutes',
+    '/api/match': './routes/matchRoutes',
+    '/api/message': './routes/messageRoutes',
+    '/api/payments': './routes/paymentRoutes',
+    '/api/photos': './routes/photoRoutes'
+  };
 
-    const routes = [
-      { path: '/api/auth', router: require('./routes/authRoutes') },
-      { path: '/api/users', router: require('./routes/userRoutes') },
-      { path: '/api/chat', router: require('./routes/chatRoutes') },
-      { path: '/api/match', router: require('./routes/matchRoutes') },
-      { path: '/api/message', router: require('./routes/messageRoutes') },
-      { path: '/api/payments', router: require('./routes/paymentRoutes') },
-      { path: '/api/photos', router: require('./routes/photoRoutes') }
-    ];
-
-    routes.forEach(({ path, router }) => {
-      app.use(path, router);
-      console.log(`✅ Route ${path} loaded`);
-    });
-
-  } catch (err) {
-    console.error('❌ Route loading failed:', err);
+  for (const [path, routePath] of Object.entries(routePaths)) {
+    try {
+      const route = require(routePath);
+      app.use(path, route);
+      console.log(`✅ Route loaded: ${path}`);
+    } catch (err) {
+      console.error(`❌ Failed to load route ${path}:`, err);
+      if (IS_PRODUCTION) {
+        // In production, fail fast if routes don't load
+        throw new Error(`Critical route failed to load: ${path}`);
+      }
+    }
   }
 };
 
-// ==================== Database Initialization ====================
+// ==================== DB Init ====================
 const initializeDatabase = async () => {
   try {
     console.log('🔄 Connecting to MongoDB...');
@@ -144,8 +148,9 @@ const startServer = async () => {
       console.warn('⚠️ Starting with degraded functionality - database not connected');
     }
 
-    await loadRoutes();
+    await loadRoutesSafely();
 
+    // ✅ Basic health check
     app.get('/', (req, res) => {
       res.json({
         status: 'ok',
@@ -155,8 +160,10 @@ const startServer = async () => {
       });
     });
 
+    // ✅ Favicon block
     app.get('/favicon.ico', (req, res) => res.sendStatus(204));
 
+    // ✅ 404 Fallback
     app.use((req, res) => {
       res.status(404).json({
         success: false,
@@ -164,6 +171,7 @@ const startServer = async () => {
       });
     });
 
+    // ✅ Global error handler
     app.use((err, req, res, next) => {
       const statusCode = err.status || 500;
       console.error(`[${statusCode}] ${req.method} ${req.url}`, err);
@@ -176,7 +184,7 @@ const startServer = async () => {
 
     server.listen(PORT, HOST, () => {
       console.log(`
-✅ Server running on port ${PORT}
+✅ Server running at http://${HOST}:${PORT}
 Environment: ${process.env.NODE_ENV || 'development'}
 MongoDB: ${mongoose.connection?.readyState === 1 ? 'connected' : 'disconnected'}
       `);
@@ -188,7 +196,7 @@ MongoDB: ${mongoose.connection?.readyState === 1 ? 'connected' : 'disconnected'}
   }
 };
 
-// ==================== Graceful Shutdown ====================
+// ==================== Shutdown Hook ====================
 const shutdown = async () => {
   console.log('🛑 Received shutdown signal');
   try {
@@ -205,5 +213,5 @@ const shutdown = async () => {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-// ==================== Start Application ====================
+// ==================== Start ====================
 startServer();

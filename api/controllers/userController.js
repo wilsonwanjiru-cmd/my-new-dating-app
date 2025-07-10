@@ -1,283 +1,360 @@
 const User = require("../models/user");
+const mongoose = require("mongoose");
 
-// Update User Gender
-const updateGender = async (req, res) => {
+// Centralized error handler
+const handleError = (error, res) => {
+  console.error("Controller Error:", error);
+  
+  if (error.name === "ValidationError") {
+    return res.status(400).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+
+  if (error.name === "CastError") {
+    return res.status(400).json({ 
+      success: false, 
+      message: "Invalid ID format" 
+    });
+  }
+
+  return res.status(500).json({ 
+    success: false, 
+    message: "Internal server error",
+    error: process.env.NODE_ENV === "development" ? error : undefined
+  });
+};
+
+// Helper to validate user IDs
+const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
+
+// User Profile Methods
+const getDescription = async (req, res) => {
   try {
-    const { userId } = req.params;
-    const { gender } = req.body;
+    if (!isValidId(req.params.userId)) {
+      return res.status(400).json({ success: false, message: "Invalid user ID" });
+    }
 
-    const user = await User.findByIdAndUpdate(userId, { gender }, { new: true });
-    if (!user) return res.status(404).json({ message: "User not found" });
+    const user = await User.findById(req.params.userId).select("description");
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
 
-    return res.status(200).json({ message: "User gender updated successfully", user });
+    return res.status(200).json({ 
+      success: true, 
+      description: user.description || "No description available" 
+    });
   } catch (error) {
-    res.status(500).json({ message: "Error updating user gender", error });
+    return handleError(error, res);
   }
 };
 
-// Update User Description
 const updateDescription = async (req, res) => {
   try {
-    const { userId } = req.params;
-    const { description } = req.body;
+    if (!isValidId(req.params.userId)) {
+      return res.status(400).json({ success: false, message: "Invalid user ID" });
+    }
 
-    const user = await User.findByIdAndUpdate(userId, { description }, { new: true });
-    if (!user) return res.status(404).json({ message: "User not found" });
+    const user = await User.findByIdAndUpdate(
+      req.params.userId,
+      { description: req.body.description },
+      { new: true, runValidators: true }
+    ).select("description");
 
-    return res.status(200).json({ message: "User description updated successfully", user });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    return res.status(200).json({ 
+      success: true, 
+      message: "Description updated successfully",
+      description: user.description 
+    });
   } catch (error) {
-    res.status(500).json({ message: "Error updating user description", error });
+    return handleError(error, res);
   }
 };
 
-// Fetch User Details
 const fetchUserDetails = async (req, res) => {
-  const { userId } = req.params;
-
   try {
-    const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ message: "User not found" });
-    res.status(200).json({ user });
+    if (!isValidId(req.params.userId)) {
+      return res.status(400).json({ success: false, message: "Invalid user ID" });
+    }
+
+    const user = await User.findById(req.params.userId)
+      .select("-password -__v")
+      .populate("crushes", "name profileImages")
+      .populate("matches", "name profileImages");
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    return res.status(200).json({ 
+      success: true, 
+      user 
+    });
   } catch (error) {
-    res.status(500).json({ message: "Error fetching user details", error });
+    return handleError(error, res);
   }
 };
 
-// Update User Profile Images
+// Profile Management Methods
+const updateGender = async (req, res) => {
+  try {
+    if (!isValidId(req.params.userId)) {
+      return res.status(400).json({ success: false, message: "Invalid user ID" });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.params.userId,
+      { gender: req.body.gender },
+      { new: true, runValidators: true }
+    ).select("gender");
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    return res.status(200).json({ 
+      success: true, 
+      message: "Gender updated successfully",
+      gender: user.gender 
+    });
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
 const updateUserProfileImages = async (req, res) => {
-  const { userId } = req.params;
-  const { profileImages } = req.body;
-
   try {
-    const user = await User.findByIdAndUpdate(userId, { profileImages }, { new: true });
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!isValidId(req.params.userId)) {
+      return res.status(400).json({ success: false, message: "Invalid user ID" });
+    }
 
-    return res.status(200).json({ message: "Profile images updated successfully", user });
-  } catch (error) {
-    res.status(500).json({ message: "Error updating profile images", error });
-  }
-};
-
-// Add a Crush
-const addCrush = async (req, res) => {
-  const { userId } = req.params;
-  const { crushId } = req.body;
-
-  try {
     const user = await User.findByIdAndUpdate(
-      userId,
-      { $addToSet: { crushes: crushId } },
+      req.params.userId,
+      { profileImages: req.body.profileImages },
       { new: true }
-    );
-    if (!user) return res.status(404).json({ message: "User not found" });
+    ).select("profileImages");
 
-    return res.status(200).json({ message: "Crush added successfully", user });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    return res.status(200).json({ 
+      success: true, 
+      message: "Profile images updated successfully",
+      profileImages: user.profileImages 
+    });
   } catch (error) {
-    res.status(500).json({ message: "Error adding crush", error });
+    return handleError(error, res);
   }
 };
 
-// Remove a Crush
-const removeCrush = async (req, res) => {
-  const { userId } = req.params;
-  const { crushId } = req.body;
-
-  try {
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { $pull: { crushes: crushId } },
-      { new: true }
-    );
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    return res.status(200).json({ message: "Crush removed successfully", user });
-  } catch (error) {
-    res.status(500).json({ message: "Error removing crush", error });
-  }
-};
-
-// Update User Preferences
-const updateUserPreferences = async (req, res) => {
-  const { userId } = req.params;
-  const { turnOns, lookingFor } = req.body;
-
-  try {
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { turnOns, lookingFor },
-      { new: true }
-    );
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    return res.status(200).json({ message: "Preferences updated successfully", user });
-  } catch (error) {
-    res.status(500).json({ message: "Error updating preferences", error });
-  }
-};
-
-// Delete User Account
-const deleteUserAccount = async (req, res) => {
-  const { userId } = req.params;
-
-  try {
-    const user = await User.findByIdAndDelete(userId);
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    return res.status(200).json({ message: "User account deleted successfully" });
-  } catch (error) {
-    res.status(500).json({ message: "Error deleting user account", error });
-  }
-};
-
-// Add Profile Image
 const addProfileImage = async (req, res) => {
   try {
-    const { userId } = req.params;
-    const { imageUrl } = req.body;
-
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { $push: { profileImages: imageUrl } },
-      { new: true }
-    );
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
+    if (!isValidId(req.params.userId)) {
+      return res.status(400).json({ success: false, message: "Invalid user ID" });
     }
 
-    res.status(200).json({ message: "Image added successfully", user });
+    if (!req.body.imageUrl) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Image URL is required" 
+      });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.params.userId,
+      { $push: { profileImages: req.body.imageUrl } },
+      { new: true }
+    ).select("profileImages");
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    return res.status(200).json({ 
+      success: true, 
+      message: "Profile image added successfully",
+      profileImages: user.profileImages 
+    });
   } catch (error) {
-    console.error("Error adding profile image:", error);
-    res.status(500).json({ message: "Server error" });
+    return handleError(error, res);
   }
 };
 
-// Add Turn-On
+// Preferences Methods
+const updateUserPreferences = async (req, res) => {
+  try {
+    if (!isValidId(req.params.userId)) {
+      return res.status(400).json({ success: false, message: "Invalid user ID" });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.params.userId,
+      { preferences: req.body.preferences },
+      { new: true, runValidators: true }
+    ).select("preferences");
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    return res.status(200).json({ 
+      success: true, 
+      message: "Preferences updated successfully",
+      preferences: user.preferences 
+    });
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
 const addTurnOn = async (req, res) => {
   try {
-    const { userId } = req.params;
-    const { turnOn } = req.body;
-
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { $addToSet: { turnOns: turnOn } },
-      { new: true }
-    );
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
+    if (!isValidId(req.params.userId)) {
+      return res.status(400).json({ success: false, message: "Invalid user ID" });
     }
 
-    res.status(200).json({ message: "Turn-on added successfully", user });
+    const user = await User.findByIdAndUpdate(
+      req.params.userId,
+      { $addToSet: { turnOns: req.body.turnOn } },
+      { new: true }
+    ).select("turnOns");
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    return res.status(200).json({ 
+      success: true, 
+      message: "Turn-on added successfully",
+      turnOns: user.turnOns 
+    });
   } catch (error) {
-    console.error("Error adding turn-on:", error);
-    res.status(500).json({ message: "Server error" });
+    return handleError(error, res);
   }
 };
 
-// Remove Turn-On
 const removeTurnOn = async (req, res) => {
   try {
-    const { userId } = req.params;
-    const { turnOn } = req.body;
-
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { $pull: { turnOns: turnOn } },
-      { new: true }
-    );
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
+    if (!isValidId(req.params.userId)) {
+      return res.status(400).json({ success: false, message: "Invalid user ID" });
     }
 
-    res.status(200).json({ message: "Turn-on removed successfully", user });
-  } catch (error) {
-    console.error("Error removing turn-on:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-};
-
-// Add Looking-For
-const addLookingFor = async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { lookingFor } = req.body;
-
     const user = await User.findByIdAndUpdate(
-      userId,
-      { $addToSet: { lookingFor } },
+      req.params.userId,
+      { $pull: { turnOns: req.body.turnOn } },
       { new: true }
-    );
+    ).select("turnOns");
 
     if (!user) {
-      return res.status(404).json({ message: "User not found" });
+      return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    res.status(200).json({ message: "Looking-for added successfully", user });
-  } catch (error) {
-    console.error("Error adding looking-for:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-};
-
-// Remove Looking-For
-const removeLookingFor = async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { lookingFor } = req.body;
-
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { $pull: { lookingFor } },
-      { new: true }
-    );
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    res.status(200).json({ message: "Looking-for removed successfully", user });
-  } catch (error) {
-    console.error("Error removing looking-for:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-};
-
-// Fetch Received Likes Details
-const getReceivedLikesDetails = async (req, res) => {
-  try {
-    const { userId } = req.params;
-
-    const user = await User.findById(userId).populate({
-      path: "receivedLikes",
-      select: "name profileImages description",
+    return res.status(200).json({ 
+      success: true, 
+      message: "Turn-on removed successfully",
+      turnOns: user.turnOns 
     });
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    res.status(200).json({ receivedLikesDetails: user.receivedLikes });
   } catch (error) {
-    console.error("Error fetching received likes details:", error);
-    res.status(500).json({ message: "Server error" });
+    return handleError(error, res);
   }
 };
 
+// Matching System Methods
+const addCrush = async (req, res) => {
+  try {
+    if (!isValidId(req.params.userId)) {
+      return res.status(400).json({ success: false, message: "Invalid user ID" });
+    }
+
+    if (!isValidId(req.body.crushId)) {
+      return res.status(400).json({ success: false, message: "Invalid crush ID" });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.params.userId,
+      { $addToSet: { crushes: req.body.crushId } },
+      { new: true }
+    ).select("crushes");
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    return res.status(200).json({ 
+      success: true, 
+      message: "Crush added successfully",
+      crushes: user.crushes 
+    });
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+const removeCrush = async (req, res) => {
+  try {
+    if (!isValidId(req.params.userId)) {
+      return res.status(400).json({ success: false, message: "Invalid user ID" });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.params.userId,
+      { $pull: { crushes: req.body.crushId } },
+      { new: true }
+    ).select("crushes");
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    return res.status(200).json({ 
+      success: true, 
+      message: "Crush removed successfully",
+      crushes: user.crushes 
+    });
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+// Account Management
+const deleteUserAccount = async (req, res) => {
+  try {
+    if (!isValidId(req.params.userId)) {
+      return res.status(400).json({ success: false, message: "Invalid user ID" });
+    }
+
+    const user = await User.findByIdAndDelete(req.params.userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    return res.status(200).json({ 
+      success: true, 
+      message: "Account deleted successfully" 
+    });
+  } catch (error) {
+    return handleError(error, res);
+  }
+};
+
+// Export all methods
 module.exports = {
-  updateGender,
+  getDescription,
   updateDescription,
   fetchUserDetails,
+  updateGender,
   updateUserProfileImages,
-  addCrush,
-  removeCrush,
-  updateUserPreferences,
-  deleteUserAccount,
   addProfileImage,
+  updateUserPreferences,
   addTurnOn,
   removeTurnOn,
-  addLookingFor,
-  removeLookingFor,
-  getReceivedLikesDetails,
+  addCrush,
+  removeCrush,
+  deleteUserAccount
 };
