@@ -309,30 +309,37 @@ class ValidateRequest {
   }
 
   // Validates profileImages (expects an array of image URLs)
-  static validateProfileImages(req, res, next) {
-    const images = req.body.profileImages;
+static validateProfileImages(req, res, next) {
+  const images = req.body.profileImages;
 
-    if (!Array.isArray(images) || images.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'profileImages must be a non-empty array of image URLs'
-      });
-    }
-
-    const isValidURL = url =>
-      typeof url === 'string' && /^https?:\/\/.+\.(jpg|jpeg|png|webp|avif|gif|svg)$/.test(url);
-
-    const invalid = images.filter(url => !isValidURL(url));
-    if (invalid.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'One or more profile image URLs are invalid',
-        invalidImages: invalid
-      });
-    }
-
-    next();
+  if (!Array.isArray(images) || images.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'profileImages must be a non-empty array of image URLs'
+    });
   }
+
+  // More permissive URL validation
+  const isValidURL = url => {
+    try {
+      new URL(url); // Validate it's a proper URL structure
+      return /^https?:\/\//i.test(url); // Only allow http/https protocols
+    } catch {
+      return false;
+    }
+  };
+
+  const invalid = images.filter(url => !isValidURL(url));
+  if (invalid.length > 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'One or more profile image URLs are invalid',
+      invalidImages: invalid
+    });
+  }
+
+  next();
+}
 
 }
 

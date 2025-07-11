@@ -8,6 +8,8 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const morgan = require('morgan');
+const { Server } = require('socket.io');
+const { format } = require('date-fns');
 
 const app = express();
 const server = http.createServer(app);
@@ -16,6 +18,25 @@ const server = http.createServer(app);
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const PORT = parseInt(process.env.PORT) || 5000;
 const HOST = process.env.HOST || '0.0.0.0';
+const API_BASE_URL = process.env.API_BASE_URL || `http://${HOST}:${PORT}`;
+
+// ✅ Check for MONGODB_URI
+if (!process.env.MONGODB_URI) {
+  console.error('❌ MONGODB_URI is missing in environment variables');
+  if (IS_PRODUCTION) process.exit(1);
+}
+
+// ==================== Initialize Socket.IO ====================
+const io = new Server(server, {
+  cors: {
+    origin: IS_PRODUCTION
+      ? process.env.CORS_ALLOWED_ORIGINS?.split(',') || []
+      : '*',
+    methods: ['GET', 'POST']
+  },
+  pingTimeout: 60000
+});
+require('./sockets/notificationSocket')(io);
 
 // ==================== Error Handlers ====================
 process.on('unhandledRejection', (reason, promise) => {
@@ -26,9 +47,6 @@ process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
   if (!IS_PRODUCTION) process.exit(1);
 });
-
-// ==================== DB Connect ====================
-const { connectDB } = require('./config/db');
 
 // ==================== Middleware ====================
 app.use(helmet({
@@ -42,7 +60,7 @@ const corsOptions = {
     ? process.env.CORS_ALLOWED_ORIGINS?.split(',') || []
     : '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   credentials: true,
   maxAge: 86400
 };
@@ -64,17 +82,24 @@ app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 // ==================== Logging ====================
 const logDirectory = path.join(__dirname, 'logs');
 if (!fs.existsSync(logDirectory)) fs.mkdirSync(logDirectory);
-const accessLogStream = fs.createWriteStream(path.join(logDirectory, 'access.log'), { flags: 'a' });
+
+const accessLogStream = fs.createWriteStream(
+  path.join(logDirectory, `access-${format(new Date(), 'yyyy-MM-dd')}.log`),
+  { flags: 'a' }
+);
 
 app.use(morgan(IS_PRODUCTION ? 'combined' : 'dev', {
   stream: IS_PRODUCTION ? accessLogStream : process.stdout,
-  skip: (req) => req.path.startsWith('/health')
+  skip: (req) => req.path === '/health'
 }));
 
 // ==================== Rate Limiting ====================
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: IS_PRODUCTION ? 100 : 1000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.path.startsWith('/health'),
   handler: (req, res) => {
     res.status(429).json({
       success: false,
@@ -84,45 +109,46 @@ const apiLimiter = rateLimit({
 });
 app.use('/api', apiLimiter);
 
-// ==================== Enhanced Route Loader ====================
-const loadRoutesSafely = async () => {
-  const routePaths = {
-    '/api/health': './routes/healthRoutes',
-    '/api/auth': './routes/authRoutes',
-    '/api/users': './routes/userRoutes',
-    '/api/chat': './routes/chatRoutes',
-    '/api/match': './routes/matchRoutes',
-    '/api/message': './routes/messageRoutes',
-    '/api/payments': './routes/paymentRoutes',
-    '/api/photos': './routes/photoRoutes'
-  };
+// ==================== Route Loading ====================
+const loadRoutes = () => {
+  const routes = [
+    { path: '/api/health', file: './routes/healthRoutes' },
+    { path: '/api/auth', file: './routes/authRoutes' },
+    { path: '/api/users', file: './routes/userRoutes' },
+    { path: '/api/chat', file: './routes/chatRoutes' },
+    { path: '/api/matches', file: './routes/matchRoutes' },
+    { path: '/api/messages', file: './routes/messageRoutes' },
+    { path: '/api/payments', file: './routes/paymentRoutes' },
+    { path: '/api/photos', file: './routes/photoRoutes' },
+    { path: '/api/notifications', file: './routes/notificationRoutes' }
+  ];
 
-  for (const [path, routePath] of Object.entries(routePaths)) {
+  routes.forEach(route => {
     try {
-      const route = require(routePath);
-      app.use(path, route);
-      console.log(`✅ Route loaded: ${path}`);
+      const router = require(route.file);
+      app.use(route.path, router);
+      console.log(`✅ Route loaded: ${route.path}`);
     } catch (err) {
-      console.error(`❌ Failed to load route ${path}:`, err);
-      if (IS_PRODUCTION) {
-        // In production, fail fast if routes don't load
-        throw new Error(`Critical route failed to load: ${path}`);
+      console.error(`❌ Failed to load route ${route.path}:`, err);
+      if (IS_PRODUCTION && !route.path.startsWith('/api/health')) {
+        process.exit(1);
       }
     }
-  }
+  });
 };
 
-// ==================== DB Init ====================
+// ==================== Database Initialization ====================
 const initializeDatabase = async () => {
+  console.log('🔄 Connecting to MongoDB...');
   try {
-    console.log('🔄 Connecting to MongoDB...');
-    await connectDB();
-
-    mongoose.connection.on('connected', () => {
-      console.log('✅ MongoDB connected');
+    await mongoose.connect(process.env.MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000
     });
 
-    mongoose.connection.on('error', (err) => {
+    console.log('✅ MongoDB connected successfully');
+
+    mongoose.connection.on('error', err => {
       console.error('❌ MongoDB connection error:', err);
     });
 
@@ -130,15 +156,17 @@ const initializeDatabase = async () => {
       console.warn('⚠️ MongoDB disconnected');
     });
 
-    await mongoose.connection.db.admin().ping();
+    const ping = await mongoose.connection.db.admin().ping();
+    console.log('📊 MongoDB pinged successfully:', ping);
+
     return true;
   } catch (err) {
-    console.error('❌ MongoDB connection failed:', err);
+    console.error('❌ Initial connection failed:', err);
     return false;
   }
 };
 
-// ==================== Start Server ====================
+// ==================== Server Initialization ====================
 const startServer = async () => {
   try {
     console.log('🚀 Starting server initialization...');
@@ -148,45 +176,51 @@ const startServer = async () => {
       console.warn('⚠️ Starting with degraded functionality - database not connected');
     }
 
-    await loadRoutesSafely();
+    loadRoutes();
 
-    // ✅ Basic health check
-    app.get('/', (req, res) => {
+    app.get('/health', (req, res) => {
       res.json({
         status: 'ok',
         timestamp: new Date().toISOString(),
         environment: process.env.NODE_ENV || 'development',
-        dbStatus: mongoose.connection?.readyState === 1 ? 'connected' : 'disconnected'
+        dbStatus: mongoose.connection?.readyState === 1 ? 'connected' : 'disconnected',
+        uptime: process.uptime()
       });
     });
 
-    // ✅ Favicon block
     app.get('/favicon.ico', (req, res) => res.sendStatus(204));
 
-    // ✅ 404 Fallback
     app.use((req, res) => {
       res.status(404).json({
         success: false,
-        message: 'Endpoint not found'
+        message: 'Endpoint not found',
+        path: req.path
       });
     });
 
-    // ✅ Global error handler
     app.use((err, req, res, next) => {
       const statusCode = err.status || 500;
-      console.error(`[${statusCode}] ${req.method} ${req.url}`, err);
-      res.status(statusCode).json({
+      const errorResponse = {
         success: false,
-        message: err.message || 'Something went wrong',
-        ...(!IS_PRODUCTION && { stack: err.stack })
-      });
+        message: err.message || 'Internal server error',
+        timestamp: new Date().toISOString(),
+        path: req.path
+      };
+
+      if (!IS_PRODUCTION) {
+        errorResponse.stack = err.stack;
+      }
+
+      console.error(`[${statusCode}] ${req.method} ${req.url}`, err);
+      res.status(statusCode).json(errorResponse);
     });
 
     server.listen(PORT, HOST, () => {
       console.log(`
-✅ Server running at http://${HOST}:${PORT}
+✅ Server running at ${API_BASE_URL}
 Environment: ${process.env.NODE_ENV || 'development'}
 MongoDB: ${mongoose.connection?.readyState === 1 ? 'connected' : 'disconnected'}
+Socket.IO: ${io ? 'enabled' : 'disabled'}
       `);
     });
 
@@ -196,12 +230,19 @@ MongoDB: ${mongoose.connection?.readyState === 1 ? 'connected' : 'disconnected'}
   }
 };
 
-// ==================== Shutdown Hook ====================
+// ==================== Graceful Shutdown ====================
 const shutdown = async () => {
   console.log('🛑 Received shutdown signal');
   try {
+    console.log('Closing HTTP server...');
     await new Promise(resolve => server.close(resolve));
+
+    console.log('Closing database connections...');
     await mongoose.disconnect();
+
+    console.log('Closing Socket.IO...');
+    io.close();
+
     console.log('✅ Server shutdown complete');
     process.exit(0);
   } catch (err) {
@@ -213,5 +254,5 @@ const shutdown = async () => {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-// ==================== Start ====================
+// ==================== Start the Server ====================
 startServer();

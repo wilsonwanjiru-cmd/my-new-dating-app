@@ -1,119 +1,186 @@
 // app/(tabs)/profile/index.js
-import { FlatList, StyleSheet, Text, View } from "react-native";
-import React, { useState, useEffect } from "react";
-import atob from "atob"; // Corrected import for decoding base64 (used by jwt-decode)
-import { jwtDecode } from "jwt-decode"; // For decoding JWT tokens
-import AsyncStorage from "@react-native-async-storage/async-storage"; // For storing and retrieving data locally
-import axios from "axios"; // For making HTTP requests
-import Profile from "../../../components/Profile"; // Custom Profile component
+import { useState, useEffect } from 'react';
+import { View, Text, Image, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { useAuth } from '../../context/AuthContext';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import axios from 'axios';
+import Constants from 'expo-constants';
+import SubscribeOverlay from '../../../components/SubscribeOverlay';
 
-// Use the environment variable for the backend URL
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://dating-app-3eba.onrender.com/";
+const API_BASE_URL = Constants.expoConfig?.extra?.apiBaseUrl || "https://dating-app-3eba.onrender.com";
 
-const Index = () => {
-  const [userId, setUserId] = useState(""); // State to store the user ID
-  const [user, setUser] = useState(null); // State to store the user details
-  const [profiles, setProfiles] = useState([]); // State to store the list of profiles
+export default function ProfileScreen({ route }) {
+  const { user: profileUser } = route.params; // User data passed from navigation
+  const { user: currentUser, isSubscribed } = useAuth();
+  const [showSubscribeModal, setShowSubscribeModal] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [profileData, setProfileData] = useState(null);
+  const [visiblePhotos, setVisiblePhotos] = useState([]);
 
-  // Fetch the user ID from the JWT token stored in AsyncStorage
   useEffect(() => {
-    const fetchUser = async () => {
+    const fetchProfileData = async () => {
       try {
-        const token = await AsyncStorage.getItem("auth"); // Retrieve the token
-        if (token) {
-          const decodedToken = jwtDecode(token); // Decode the token
-          const userId = decodedToken.userId; // Extract the user ID
-          setUserId(userId); // Set the user ID in state
-        }
+        const token = await AsyncStorage.getItem('auth');
+        const response = await axios.get(`${API_BASE_URL}/api/users/${profileUser._id}`, {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+        
+        setProfileData(response.data);
+        setVisiblePhotos(
+          isSubscribed 
+            ? response.data.profileImages 
+            : response.data.profileImages.slice(0, 7)
+        );
       } catch (error) {
-        console.log("Error decoding token or fetching user ID:", error);
+        console.error('Error fetching profile:', error);
+      } finally {
+        setLoading(false);
       }
     };
 
-    fetchUser();
-  }, []);
+    fetchProfileData();
+  }, [profileUser._id, isSubscribed]);
 
-  // Fetch the user's details using the user ID
-  const fetchUserDescription = async () => {
-    try {
-      const response = await axios.get(`${API_BASE_URL}/api/users/${userId}/description`);
-      console.log("User details response:", response);
-      const user = response.data.user; // Extract user details from the response
-      setUser(user); // Set the user details in state
-    } catch (error) {
-      console.log("Error fetching user description:", error);
-    }
-  };
+  if (loading) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
 
-  // Update the user's description
-  const updateUserDescription = async (description) => {
-    try {
-      const response = await axios.post(
-        `${API_BASE_URL}/api/users/${userId}/description`,
-        { description }
-      );
-      console.log("Update description response:", response);
-      if (response.status === 200) {
-        setUser(response.data.user); // Update the user details in state
-      }
-    } catch (error) {
-      console.log("Error updating user description:", error);
-    }
-  };
-
-  // Fetch profiles based on the user's preferences
-  const fetchProfiles = async () => {
-    try {
-      const response = await axios.get(`${API_BASE_URL}/api/profiles`, {
-        params: {
-          userId: userId,
-          gender: user?.gender,
-          turnOns: user?.turnOns,
-          lookingFor: user?.lookingFor,
-        },
-      });
-
-      setProfiles(response.data.profiles); // Set the profiles in state
-    } catch (error) {
-      console.log("Error fetching profiles:", error);
-    }
-  };
-
-  // Fetch user details when the user ID changes
-  useEffect(() => {
-    if (userId) {
-      fetchUserDescription();
-    }
-  }, [userId]);
-
-  // Fetch profiles when the user ID or user details change
-  useEffect(() => {
-    if (userId && user) {
-      fetchProfiles();
-    }
-  }, [userId, user]);
-
-  console.log("Profiles:", profiles);
+  if (!profileData) {
+    return (
+      <View style={styles.centered}>
+        <Text>Profile not found</Text>
+      </View>
+    );
+  }
 
   return (
-    <View style={{ flex: 1 }}>
-      <FlatList
-        data={profiles}
-        keyExtractor={(item) => item.id} // Ensure each item has a unique key
-        renderItem={({ item, index }) => (
-          <Profile
-            key={index}
-            item={item}
-            userId={userId}
-            setProfiles={setProfiles}
-            isEven={index % 2 === 0} // Alternate styling for even/odd items
-          />
-        )}
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.name}>{profileData.name}</Text>
+        <Text style={styles.age}>{profileData.age || ''}</Text>
+      </View>
+
+      <Text style={styles.description}>{profileData.description || 'No description yet'}</Text>
+
+      {/* Photo Gallery */}
+      <View style={styles.photosContainer}>
+        <Text style={styles.sectionTitle}>Photos</Text>
+        <FlatList
+          data={visiblePhotos}
+          numColumns={3}
+          keyExtractor={(item, index) => index.toString()}
+          renderItem={({ item }) => (
+            <Image 
+              source={{ uri: item }} 
+              style={styles.photo}
+              resizeMode="cover"
+            />
+          )}
+          ListFooterComponent={
+            !isSubscribed && profileData.profileImages.length > 7 && (
+              <TouchableOpacity 
+                style={styles.subscribeButton}
+                onPress={() => setShowSubscribeModal(true)}
+              >
+                <Text style={styles.subscribeButtonText}>
+                  Subscribe to view all {profileData.profileImages.length} photos
+                </Text>
+              </TouchableOpacity>
+            )
+          }
+        />
+      </View>
+
+      {/* Like Button */}
+      <TouchableOpacity style={styles.likeButton}>
+        <Text style={styles.likeButtonText}>Like</Text>
+      </TouchableOpacity>
+
+      {/* Subscription Modal */}
+      <SubscribeOverlay
+        visible={showSubscribeModal}
+        message={`Subscribe to view all ${profileData.profileImages.length} photos`}
+        onSubscribe={() => {
+          setShowSubscribeModal(false);
+          // Navigate to subscription screen
+          navigation.navigate('Subscribe');
+        }}
+        onClose={() => setShowSubscribeModal(false)}
       />
     </View>
   );
-};
+}
 
-export default Index;
-
-const styles = StyleSheet.create({});
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    padding: 16,
+    backgroundColor: '#fff',
+  },
+  centered: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  name: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginRight: 8,
+  },
+  age: {
+    fontSize: 18,
+    color: '#666',
+  },
+  description: {
+    fontSize: 16,
+    marginBottom: 24,
+    color: '#444',
+  },
+  photosContainer: {
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  photo: {
+    width: '32%',
+    aspectRatio: 1,
+    margin: '0.5%',
+    borderRadius: 8,
+  },
+  subscribeButton: {
+    backgroundColor: '#FF6B6B',
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 12,
+    alignItems: 'center',
+  },
+  subscribeButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+  },
+  likeButton: {
+    backgroundColor: '#4CAF50',
+    padding: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  likeButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 16,
+  },
+});

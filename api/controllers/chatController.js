@@ -1,165 +1,457 @@
-const mongoose = require("mongoose");
-const Chat = require("../models/Chat");
-const User = require("../models/user");
+const Message = require('../models/Chat');
+const User = require('../models/user');
+const mongoose = require('mongoose');
+const { formatDistanceToNow } = require('date-fns');
 
-// Send a message to a user
-const sendMessage = async (req, res) => {
-  const { senderId, receiverId, message } = req.body;
+// Centralized error handler
+const handleError = (error, res) => {
+  console.error('Chat Controller Error:', error);
+  
+  if (error instanceof mongoose.Error.ValidationError) {
+    return res.status(400).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
 
+  if (error instanceof mongoose.Error.CastError) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Invalid ID format' 
+    });
+  }
+
+  return res.status(500).json({ 
+    success: false, 
+    message: 'Internal server error',
+    error: process.env.NODE_ENV === 'development' ? error : undefined
+  });
+};
+
+// Get all messages between current user and others
+exports.getMessages = async (req, res) => {
   try {
-    // Verify if the sender has an active subscription
-    const sender = await User.findById(senderId);
+    const { recipientId } = req.query;
+    const currentUserId = req.user._id;
 
-    if (!sender || !sender.isSubscribed || new Date() > sender.subscriptionExpires) {
-      return res.status(403).json({
-        message: "Your subscription has expired or is inactive. Please subscribe to send messages.",
+    // If recipientId is provided, get conversation between two users
+    if (recipientId) {
+      if (!mongoose.Types.ObjectId.isValid(recipientId)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid recipient ID'
+        });
+      }
+
+      // Check if recipient exists
+      const recipient = await User.findById(recipientId);
+      if (!recipient) {
+        return res.status(404).json({
+          success: false,
+          message: 'Recipient not found'
+        });
+      }
+
+      const messages = await Message.find({
+        $or: [
+          { sender: currentUserId, recipient: recipientId },
+          { sender: recipientId, recipient: currentUserId }
+        ]
+      })
+      .sort({ createdAt: -1 })
+      .populate('sender', 'name profileImages')
+      .populate('recipient', 'name profileImages');
+
+      // Mark messages as read if they're being viewed by recipient
+      await Message.updateMany(
+        {
+          recipient: currentUserId,
+          sender: recipientId,
+          isRead: false
+        },
+        { $set: { isRead: true } }
+      );
+
+      return res.status(200).json({
+        success: true,
+        data: messages,
+        recipientInfo: {
+          name: recipient.name,
+          profileImages: req.user.hasActiveSubscription 
+            ? recipient.profileImages 
+            : recipient.profileImages.slice(0, 7),
+          canMessage: recipient.subscription?.isActive
+        }
       });
     }
 
-    const newMessage = new Chat({
-      senderId: new mongoose.Types.ObjectId(senderId),
-      receiverId: new mongoose.Types.ObjectId(receiverId),
-      message,
-      timestamp: new Date(),
+    // If no recipientId, get all recent conversations
+    const conversations = await Message.aggregate([
+      {
+        $match: {
+          $or: [
+            { sender: currentUserId },
+            { recipient: currentUserId }
+          ]
+        }
+      },
+      {
+        $sort: { createdAt: -1 }
+      },
+      {
+        $group: {
+          _id: {
+            $cond: [
+              { $eq: ["$sender", currentUserId] },
+              "$recipient",
+              "$sender"
+            ]
+          },
+          lastMessage: { $first: "$$ROOT" },
+          unreadCount: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ["$recipient", currentUserId] },
+                    { $eq: ["$isRead", false] }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          }
+        }
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "_id",
+          foreignField: "_id",
+          as: "user"
+        }
+      },
+      {
+        $unwind: "$user"
+      },
+      {
+        $project: {
+          userId: "$_id",
+          _id: 0,
+          lastMessage: 1,
+          unreadCount: 1,
+          user: {
+            name: 1,
+            profileImages: 1,
+            subscription: 1,
+            lastActive: 1
+          }
+        }
+      }
+    ]);
+
+    // Process profile images based on subscription
+    const processedConversations = conversations.map(conv => {
+      const canViewAll = req.user.hasActiveSubscription;
+      return {
+        ...conv,
+        user: {
+          ...conv.user,
+          profileImages: canViewAll 
+            ? conv.user.profileImages 
+            : conv.user.profileImages.slice(0, 7)
+        }
+      };
     });
 
-    await newMessage.save();
+    res.status(200).json({
+      success: true,
+      data: processedConversations
+    });
 
-    res.status(201).json({ message: "Message sent successfully", newMessage });
   } catch (error) {
-    console.error("Error sending message:", error);
-    res.status(500).json({ message: "Failed to send message", error });
+    handleError(error, res);
   }
 };
 
-// Get messages between two users
-const getMessages = async (req, res) => {
-  const { senderId, receiverId } = req.query;
-
+// Send a new message
+exports.sendMessage = async (req, res) => {
   try {
-    if (!senderId || !receiverId) {
-      return res.status(400).json({ message: "Both senderId and receiverId are required" });
+    const { recipientId, content } = req.body;
+    const senderId = req.user._id;
+
+    // Validate input
+    if (!mongoose.Types.ObjectId.isValid(recipientId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid recipient ID'
+      });
     }
 
-    const senderObjectId = new mongoose.Types.ObjectId(senderId);
-    const receiverObjectId = new mongoose.Types.ObjectId(receiverId);
+    if (!content || content.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Message content is required'
+      });
+    }
 
-    const messages = await Chat.find({
-      $or: [
-        { senderId: senderObjectId, receiverId: receiverObjectId },
-        { senderId: receiverObjectId, receiverId: senderObjectId },
-      ],
-    })
-      .populate("senderId", "_id name")
-      .populate("receiverId", "_id name")
-      .sort({ timestamp: 1 }); // Sorting messages by timestamp in ascending order
+    // Check if recipient exists
+    const recipient = await User.findById(recipientId);
+    if (!recipient) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recipient not found'
+      });
+    }
 
-    res.status(200).json(messages);
+    // Check subscription status for sender
+    if (!req.user.hasActiveSubscription) {
+      return res.status(403).json({
+        success: false,
+        message: 'Please subscribe for KES 10 to send messages',
+        upgradeRequired: true
+      });
+    }
+
+    // Create the message
+    const message = await Message.create({
+      sender: senderId,
+      recipient: recipientId,
+      content: content.trim(),
+      requiresSubscription: !recipient.subscription?.isActive
+    });
+
+    // Populate sender/recipient info
+    const populatedMessage = await Message.populate(message, [
+      { path: 'sender', select: 'name profileImages' },
+      { path: 'recipient', select: 'name profileImages' }
+    ]);
+
+    // Notify recipient if they haven't paid
+    if (!recipient.subscription?.isActive) {
+      await User.findByIdAndUpdate(recipientId, {
+        $push: { 
+          notifications: {
+            type: 'new_message',
+            from: senderId,
+            message: `${req.user.name} sent you a message`,
+            data: { 
+              messageId: message._id,
+              requiresSubscription: true
+            },
+            createdAt: new Date()
+          }
+        },
+        $set: { lastActive: new Date() }
+      });
+    }
+
+    res.status(201).json({
+      success: true,
+      message: populatedMessage,
+      recipientCanReply: recipient.subscription?.isActive || false
+    });
+
   } catch (error) {
-    console.error("Error fetching messages:", error);
-    res.status(500).json({ message: "Error getting messages", error });
+    handleError(error, res);
   }
 };
 
 // Delete a specific message
-const deleteMessage = async (req, res) => {
-  const { messageId } = req.params;
-
+exports.deleteMessage = async (req, res) => {
   try {
-    const message = await Chat.findByIdAndDelete(messageId);
-    if (!message) {
-      return res.status(404).json({ message: "Message not found" });
-    }
-    res.status(200).json({ message: "Message deleted successfully" });
-  } catch (error) {
-    console.error("Error deleting message:", error);
-    res.status(500).json({ message: "Error deleting message", error });
-  }
-};
+    const { messageId } = req.params;
+    const userId = req.user._id;
 
-// Update a specific message
-const updateMessage = async (req, res) => {
-  const { messageId } = req.params;
-  const { newMessageContent } = req.body;
-
-  try {
-    const message = await Chat.findById(messageId);
-    if (!message) {
-      return res.status(404).json({ message: "Message not found" });
+    if (!mongoose.Types.ObjectId.isValid(messageId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid message ID'
+      });
     }
 
-    message.message = newMessageContent;
-    await message.save();
-
-    res.status(200).json({ message: "Message updated successfully", updatedMessage: message });
-  } catch (error) {
-    console.error("Error updating message:", error);
-    res.status(500).json({ message: "Error updating message", error });
-  }
-};
-
-// Mark a message as read
-const markMessageAsRead = async (req, res) => {
-  const { messageId } = req.params;
-
-  try {
-    const message = await Chat.findById(messageId);
-    if (!message) {
-      return res.status(404).json({ message: "Message not found" });
-    }
-
-    message.read = true;
-    await message.save();
-
-    res.status(200).json({ message: "Message marked as read", updatedMessage: message });
-  } catch (error) {
-    console.error("Error marking message as read:", error);
-    res.status(500).json({ message: "Error marking message as read", error });
-  }
-};
-
-// Fetch unread messages for a user
-const getUnreadMessages = async (req, res) => {
-  const { userId } = req.query;
-
-  try {
-    const unreadMessages = await Chat.find({
-      receiverId: new mongoose.Types.ObjectId(userId),
-      read: false,
-    }).populate("senderId", "_id name");
-
-    res.status(200).json(unreadMessages);
-  } catch (error) {
-    console.error("Error fetching unread messages:", error);
-    res.status(500).json({ message: "Error getting unread messages", error });
-  }
-};
-
-// Delete all messages between two users
-const deleteChatHistory = async (req, res) => {
-  const { senderId, receiverId } = req.body;
-
-  try {
-    await Chat.deleteMany({
+    const message = await Message.findOne({
+      _id: messageId,
       $or: [
-        { senderId: new mongoose.Types.ObjectId(senderId), receiverId: new mongoose.Types.ObjectId(receiverId) },
-        { senderId: new mongoose.Types.ObjectId(receiverId), receiverId: new mongoose.Types.ObjectId(senderId) },
-      ],
+        { sender: userId },
+        { recipient: userId }
+      ]
     });
 
-    res.status(200).json({ message: "Chat history deleted successfully" });
+    if (!message) {
+      return res.status(404).json({
+        success: false,
+        message: 'Message not found or unauthorized'
+      });
+    }
+
+    // Soft delete by adding user to deletedBy array
+    if (!message.deletedBy.includes(userId)) {
+      message.deletedBy.push(userId);
+      await message.save();
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Message deleted successfully'
+    });
+
   } catch (error) {
-    console.error("Error deleting chat history:", error);
-    res.status(500).json({ message: "Failed to delete chat history", error });
+    handleError(error, res);
   }
 };
 
-module.exports = {
-  sendMessage,
-  getMessages,
-  deleteMessage,
-  updateMessage,
-  markMessageAsRead,
-  getUnreadMessages,
-  deleteChatHistory,
+// Update a message
+exports.updateMessage = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { content } = req.body;
+    const userId = req.user._id;
+
+    if (!mongoose.Types.ObjectId.isValid(messageId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid message ID'
+      });
+    }
+
+    if (!content || content.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Message content is required'
+      });
+    }
+
+    const message = await Message.findOneAndUpdate(
+      {
+        _id: messageId,
+        sender: userId,
+        createdAt: { $gt: new Date(Date.now() - 5 * 60 * 1000) } // Only allow edits within 5 minutes
+      },
+      { 
+        content: content.trim(),
+        edited: true 
+      },
+      { new: true }
+    );
+
+    if (!message) {
+      return res.status(404).json({
+        success: false,
+        message: 'Message not found, unauthorized, or edit window expired'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: await Message.populate(message, [
+        { path: 'sender', select: 'name profileImages' },
+        { path: 'recipient', select: 'name profileImages' }
+      ])
+    });
+
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+// Mark message as read
+exports.markMessageAsRead = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const userId = req.user._id;
+
+    if (!mongoose.Types.ObjectId.isValid(messageId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid message ID'
+      });
+    }
+
+    const message = await Message.findOneAndUpdate(
+      {
+        _id: messageId,
+        recipient: userId,
+        isRead: false
+      },
+      { $set: { isRead: true } },
+      { new: true }
+    );
+
+    if (!message) {
+      return res.status(404).json({
+        success: false,
+        message: 'Message not found or already read'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Message marked as read'
+    });
+
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+// Get unread messages
+exports.getUnreadMessages = async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    const messages = await Message.find({
+      recipient: userId,
+      isRead: false
+    })
+    .sort({ createdAt: -1 })
+    .populate('sender', 'name profileImages');
+
+    res.status(200).json({
+      success: true,
+      count: messages.length,
+      messages
+    });
+
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+// Delete chat history with a user
+exports.deleteChatHistory = async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const currentUserId = req.user._id;
+
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user ID'
+      });
+    }
+
+    // Mark all messages as deleted by current user
+    await Message.updateMany(
+      {
+        $or: [
+          { sender: currentUserId, recipient: userId },
+          { sender: userId, recipient: currentUserId }
+        ],
+        deletedBy: { $ne: currentUserId }
+      },
+      {
+        $push: { deletedBy: currentUserId }
+      }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Chat history deleted successfully'
+    });
+
+  } catch (error) {
+    handleError(error, res);
+  }
 };

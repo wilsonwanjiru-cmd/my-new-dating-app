@@ -1,35 +1,16 @@
 const express = require("express");
 const router = express.Router();
-const path = require("path");
 const ValidateRequest = require("../middlewares/validateRequest");
+const { checkSubscription, restrictFreeUsers } = require("../middlewares/subscriptionMiddleware");
+const { authenticate } = require("../middlewares/authMiddleware");
 
-// Enhanced controller loader with verification and caching
-const loadController = (controllerName) => {
-  const controllerPath = path.resolve(__dirname, `../controllers/${controllerName}`);
-  try {
-    delete require.cache[require.resolve(controllerPath)];
-    const controller = require(controllerPath);
-    const methods = Object.getOwnPropertyNames(Object.getPrototypeOf(controller))
-      .filter(key => key !== 'constructor' && typeof controller[key] === 'function');
-    if (!methods.length) throw new Error(`No valid methods found in ${controllerName}`);
-    console.log(`✅ ${controllerName} methods verified:`, methods);
-    return controller;
-  } catch (error) {
-    console.error(`❌ Critical error loading ${controllerName}:`, error.message);
-    throw error;
-  }
-};
+// ✅ Import all controllers directly
+const UserController = require("../controllers/userController");
+const MatchController = require("../controllers/matchController");
+const NotificationController = require("../controllers/notificationController");
+const PaymentController = require("../controllers/paymentController");
 
-// Load controllers
-let UserController, MatchController;
-try {
-  UserController = loadController("userController");
-  MatchController = loadController("matchController");
-} catch (error) {
-  process.exit(1);
-}
-
-// Method validator
+// ✅ Method validator
 const verifyMethod = (controller, methodName) => {
   if (!controller) throw new Error(`Controller is undefined`);
   const fn = controller[methodName];
@@ -39,7 +20,7 @@ const verifyMethod = (controller, methodName) => {
   return fn;
 };
 
-// Route creator
+// ✅ Route creator
 const createRoute = (handler, ...middlewares) => {
   const validated = middlewares.map(mw => {
     if (typeof mw !== 'function') throw new Error(`Invalid middleware: ${mw}`);
@@ -52,8 +33,9 @@ const createRoute = (handler, ...middlewares) => {
 // ========== User Profile ==========
 router.get("/:userId",
   ...createRoute(
-    verifyMethod(UserController, 'fetchUserDetails'),
-    ValidateRequest.validateObjectId
+    verifyMethod(UserController, 'getProfile'),
+    ValidateRequest.validateObjectId,
+    checkSubscription
   )
 );
 
@@ -67,108 +49,92 @@ router.get("/:userId/description",
 router.put("/:userId/description",
   ...createRoute(
     verifyMethod(UserController, 'updateDescription'),
+    authenticate,
     ValidateRequest.validateObjectId,
     ValidateRequest.validateDescriptionUpdate
   )
 );
 
-// ========== Profile Management ==========
-const profileRoutes = express.Router({ mergeParams: true });
-
-profileRoutes.put("/gender",
+// ========== Profile Images ==========
+router.post("/:userId/profile-images",
   ...createRoute(
-    verifyMethod(UserController, 'updateGender'),
-    ValidateRequest.validateGenderUpdate
+    verifyMethod(UserController, 'addProfileImages'),
+    authenticate,
+    ValidateRequest.validateObjectId,
+    checkSubscription,
+    restrictFreeUsers('profile image uploads')
   )
 );
 
-profileRoutes.put("/profile-images",
+// ========== Subscription ==========
+router.post("/:userId/subscribe",
   ...createRoute(
-    verifyMethod(UserController, 'updateUserProfileImages'),
-    ValidateRequest.validateProfileImages
+    verifyMethod(UserController, 'processSubscription'),
+    authenticate,
+    ValidateRequest.validateObjectId
   )
 );
 
-profileRoutes.post("/profile-images",
+router.get("/:userId/subscription-status",
   ...createRoute(
-    verifyMethod(UserController, 'addProfileImage'),
-    ValidateRequest.validateProfileImages
+    verifyMethod(UserController, 'getSubscriptionStatus'),
+    authenticate,
+    ValidateRequest.validateObjectId
   )
 );
 
-// ========== Preferences ==========
-const preferenceRoutes = express.Router({ mergeParams: true });
-
-preferenceRoutes.put("/",
+// ========== Notifications ==========
+router.get("/:userId/notifications",
   ...createRoute(
-    verifyMethod(UserController, 'updateUserPreferences'),
-    ValidateRequest.validateUserPreferences
+    verifyMethod(UserController, 'getNotifications'),
+    authenticate,
+    ValidateRequest.validateObjectId
   )
 );
 
-preferenceRoutes.put("/turn-ons/add",
+router.put("/:userId/notifications/read",
   ...createRoute(
-    verifyMethod(UserController, 'addTurnOn'),
-    ValidateRequest.validateTurnOnInput
+    verifyMethod(UserController, 'markNotificationRead'),
+    authenticate,
+    ValidateRequest.validateObjectId
   )
 );
 
-preferenceRoutes.put("/turn-ons/remove",
+// ========== Match ==========
+router.post("/:userId/like",
   ...createRoute(
-    verifyMethod(UserController, 'removeTurnOn'),
-    ValidateRequest.validateTurnOnInput
+    verifyMethod(UserController, 'handleLike'),
+    authenticate,
+    ValidateRequest.validateObjectId,
+    checkSubscription,
+    restrictFreeUsers('liking profiles')
   )
 );
 
-// ========== Match Features ==========
-const matchRoutes = express.Router({ mergeParams: true });
-
-matchRoutes.put("/crush",
+// ========== Preferences & Messaging ==========
+router.post("/:userId/messages",
   ...createRoute(
-    verifyMethod(UserController, 'addCrush'),
-    ValidateRequest.validateCrushId
+    verifyMethod(UserController, 'sendMessage'),
+    authenticate,
+    ValidateRequest.validateObjectId,
+    checkSubscription,
+    restrictFreeUsers('messaging')
   )
 );
 
-matchRoutes.delete("/crush",
+router.get("/:userId/messages/:recipientId",
   ...createRoute(
-    verifyMethod(UserController, 'removeCrush'),
-    ValidateRequest.validateCrushId
+    verifyMethod(UserController, 'getConversation'),
+    authenticate,
+    ValidateRequest.validateObjectId,
+    checkSubscription
   )
 );
 
-matchRoutes.get("/matches",
+router.put("/preferences",
   ...createRoute(
-    verifyMethod(MatchController, 'getMatches')
-  )
-);
-
-matchRoutes.get("/crushes",
-  ...createRoute(
-    verifyMethod(MatchController, 'getCrushes')
-  )
-);
-
-// ========== Nested Routes Mount ==========
-router.use("/:userId",
-  ValidateRequest.validateObjectId,
-  profileRoutes,
-  preferenceRoutes,
-  matchRoutes
-);
-
-// ========== Global Match Routes ==========
-router.post("/match",
-  ...createRoute(
-    verifyMethod(MatchController, 'createMatch'),
-    ValidateRequest.validateBodyObjectId(['userAId', 'userBId']) // example usage
-  )
-);
-
-router.post("/unmatch",
-  ...createRoute(
-    verifyMethod(MatchController, 'unmatch'),
-    ValidateRequest.validateBodyObjectId(['userAId', 'userBId']) // example usage
+    verifyMethod(UserController, 'updatePreferences'),
+    authenticate
   )
 );
 
@@ -176,11 +142,12 @@ router.post("/unmatch",
 router.delete("/:userId",
   ...createRoute(
     verifyMethod(UserController, 'deleteUserAccount'),
+    authenticate,
     ValidateRequest.validateObjectId
   )
 );
 
-// ========== Error Middleware ==========
+// ========== Error Handler ==========
 router.use((err, req, res, next) => {
   console.error('❌ Route error:', err.message);
   res.status(500).json({
