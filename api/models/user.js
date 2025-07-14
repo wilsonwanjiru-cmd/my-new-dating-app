@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 const validator = require('validator');
-const bcrypt = require('bcryptjs');
+const bcrypt = require('bcrypt'); 
 const { formatDistanceToNow } = require('date-fns');
 
 const userSchema = new mongoose.Schema({

@@ -1,8 +1,9 @@
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
-const bcrypt = require("bcryptjs");
+const bcrypt = require("bcrypt"); // Changed from bcryptjs to bcrypt
 const User = require("../models/user");
 const { initiateSTKPush } = require("../utils/mpesaUtils");
+
 
 // Configuration
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(64).toString("hex");
