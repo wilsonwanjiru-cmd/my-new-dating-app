@@ -13,12 +13,13 @@ import {
   ScrollView,
   TouchableOpacity
 } from "react-native";
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useContext } from "react";
 import { MaterialIcons, AntDesign, Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
-import { API_BASE_URL } from '../config';
+import { API_BASE_URL } from "../_config";
+import { AuthContext } from '../_context/AuthContext';
 
 const Login = () => {
   const [email, setEmail] = useState("");
@@ -26,9 +27,11 @@ const Login = () => {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState("");
-  const router = useRouter();
 
-  // Configuration
+  const { setUser, setToken, setIsSubscribed, setSubscriptionExpiresAt } =
+    useContext(AuthContext);
+
+  const router = useRouter();
   const CONNECTION_TIMEOUT = 15000;
 
   useEffect(() => {
@@ -62,18 +65,27 @@ const Login = () => {
           password: password.trim(),
         },
         {
-          headers: { 
-            'Content-Type': 'application/json',
-            'X-Connection-Source': 'Mobile-App'
+          headers: {
+            "Content-Type": "application/json",
+            "X-Connection-Source": "Mobile-App",
           },
-          timeout: CONNECTION_TIMEOUT
+          timeout: CONNECTION_TIMEOUT,
         }
       );
 
+      const { user, token } = response.data;
+
+      // Save in AsyncStorage
       await AsyncStorage.multiSet([
-        ["auth", response.data.token],
-        ["user", JSON.stringify(response.data.user || {})]
+        ["auth", token],
+        ["user", JSON.stringify(user)],
       ]);
+
+      // Update Auth Context
+      setUser(user);
+      setToken(token);
+      setIsSubscribed(user.isSubscribed);
+      setSubscriptionExpiresAt(user.subscriptionExpiresAt);
 
       setConnectionStatus("Login successful");
       router.replace("/(authenticate)/select");
@@ -86,17 +98,17 @@ const Login = () => {
 
   const handleLoginError = (error) => {
     let errorMessage = "An error occurred during login.";
-    
+
     if (error.response) {
-      // Server responded with error status
       if (error.response.status === 401) {
         errorMessage = "Invalid email or password.";
       } else if (error.response.status >= 500) {
         errorMessage = "Server error. Please try again later.";
       }
       setConnectionStatus(`Server error: ${error.response.status}`);
-    } else if (error.code === 'ECONNABORTED') {
-      errorMessage = "Connection timeout. Please check your internet connection.";
+    } else if (error.code === "ECONNABORTED") {
+      errorMessage =
+        "Connection timeout. Please check your internet connection.";
       setConnectionStatus("Connection timeout");
     } else {
       errorMessage = error.message || "Network error occurred.";
@@ -120,7 +132,7 @@ const Login = () => {
         <Text style={styles.appTitle}>Match Mate</Text>
       </View>
 
-      <KeyboardAvoidingView 
+      <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={styles.keyboardView}
         keyboardVerticalOffset={Platform.OS === "ios" ? 60 : 0}
@@ -131,7 +143,9 @@ const Login = () => {
         >
           {connectionStatus ? (
             <View style={styles.connectionStatus}>
-              <Text style={styles.connectionStatusText}>{connectionStatus}</Text>
+              <Text style={styles.connectionStatusText}>
+                {connectionStatus}
+              </Text>
             </View>
           ) : null}
 
@@ -202,7 +216,7 @@ const Login = () => {
 
             <View style={styles.optionsContainer}>
               <Text style={styles.rememberText}>Keep me logged in</Text>
-              <Pressable 
+              <Pressable
                 onPress={() => !loading && router.push("/forgot-password")}
                 disabled={loading}
               >
@@ -227,7 +241,8 @@ const Login = () => {
               style={styles.signUpContainer}
             >
               <Text style={styles.signUpText}>
-                Don't have an account? <Text style={styles.signUpLink}>Sign Up</Text>
+                Don't have an account?{" "}
+                <Text style={styles.signUpLink}>Sign Up</Text>
               </Text>
             </Pressable>
 
@@ -276,14 +291,14 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
   connectionStatus: {
-    backgroundColor: '#e3f2fd',
+    backgroundColor: "#e3f2fd",
     padding: 10,
     borderRadius: 5,
     marginBottom: 10,
   },
   connectionStatusText: {
-    color: '#1976d2',
-    textAlign: 'center',
+    color: "#1976d2",
+    textAlign: "center",
     fontSize: 12,
   },
   titleContainer: {
@@ -392,13 +407,14 @@ const styles = StyleSheet.create({
   debugContainer: {
     marginTop: 20,
     padding: 10,
-    backgroundColor: '#f0f0f0',
+    backgroundColor: "#f0f0f0",
     borderRadius: 5,
   },
   debugText: {
     fontSize: 12,
-    color: '#666',
+    color: "#666",
   },
 });
 
 export default Login;
+

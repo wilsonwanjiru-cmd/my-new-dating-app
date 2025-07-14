@@ -19,11 +19,13 @@ import { decode as atob } from 'base-64';
 import { jwtDecode } from "jwt-decode";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import base64 from 'base-64';
+import { useAuth } from "../../_context/AuthContext";
 
 // Use the environment variable for the backend URL
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://dating-app-3eba.onrender.com/";
 
 const BioScreen = () => {
+  const { user, isSubscribed } = useAuth();
   const [option, setOption] = useState("AD");
   const [description, setDescription] = useState("");
   const [activeSlide, setActiveSlide] = useState(0);
@@ -293,6 +295,19 @@ const BioScreen = () => {
   };
 
   const handleAddImage = async () => {
+    // Check subscription status and photo limit
+    if (!isSubscribed && images.length >= 7) {
+      Alert.alert(
+        "Upload Limit Reached",
+        "Free users can only upload up to 7 photos. Please subscribe to upload more.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Subscribe", onPress: () => navigation.navigate('Subscribe') }
+        ]
+      );
+      return;
+    }
+
     if (!imageUrl) {
       Alert.alert("Error", "Please enter an image URL");
       return;
@@ -499,6 +514,11 @@ const BioScreen = () => {
 
             <View style={{ marginTop: 25 }}>
               <Text style={{ fontSize: 16, fontWeight: "500" }}>Add a picture of yourself</Text>
+              {!isSubscribed && (
+                <Text style={{ color: '#fd5c63', marginBottom: 5 }}>
+                  {7 - images.length} photos remaining (7 max for free users)
+                </Text>
+              )}
               <View
                 style={{
                   flexDirection: "row",
@@ -530,7 +550,9 @@ const BioScreen = () => {
                   backgroundColor: "#fd5c63",
                   padding: 10,
                   borderRadius: 5,
+                  opacity: (!isSubscribed && images.length >= 7) ? 0.5 : 1
                 }}
+                disabled={!isSubscribed && images.length >= 7}
               >
                 <Text style={{ color: "white", textAlign: "center" }}>Add Image</Text>
               </Pressable>

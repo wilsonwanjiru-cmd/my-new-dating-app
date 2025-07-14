@@ -1,12 +1,14 @@
+// frontend/app/_layout.js
+import React from 'react';
 import { Stack } from 'expo-router';
 import { View, StatusBar } from 'react-native';
-import { AuthProvider } from './context/AuthContext';
+import { AuthProvider } from './_context/AuthContext';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
-import { SubscriptionProvider } from './context/SubscriptionContext';
-import { SocketProvider } from './context/SocketContext';
+import { SubscriptionProvider } from './_context/SubscriptionContext';
+import { SocketProvider } from './_context/SocketContext';
 
 // Create a client for React Query
 const queryClient = new QueryClient({

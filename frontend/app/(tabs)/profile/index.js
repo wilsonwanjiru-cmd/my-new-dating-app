@@ -1,47 +1,79 @@
 // app/(tabs)/profile/index.js
-import { useState, useEffect } from 'react';
-import { View, Text, Image, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
-import { useAuth } from '../../context/AuthContext';
+// frontend/app/(tabs)/profile/index.js
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  Image,
+  FlatList,
+  StyleSheet,
+  TouchableOpacity,
+  ActivityIndicator,
+  Alert
+} from 'react-native';
+import { useAuth } from '../../_context/AuthContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 import Constants from 'expo-constants';
+import { useNavigation } from 'expo-router';
 import SubscribeOverlay from '../../../components/SubscribeOverlay';
 
-const API_BASE_URL = Constants.expoConfig?.extra?.apiBaseUrl || "https://dating-app-3eba.onrender.com";
+const API_BASE_URL =
+  Constants.expoConfig?.extra?.apiBaseUrl || 'https://dating-app-3eba.onrender.com';
 
 export default function ProfileScreen({ route }) {
-  const { user: profileUser } = route.params; // User data passed from navigation
-  const { user: currentUser, isSubscribed } = useAuth();
+  const navigation = useNavigation();
+  const { user: routeUser } = route?.params || {}; // selected profile
+  const { user: currentUser, isSubscribed, subscriptionExpiresAt } = useAuth();
+
+  const profileUser = routeUser || currentUser; // fallback to self
   const [showSubscribeModal, setShowSubscribeModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [profileData, setProfileData] = useState(null);
   const [visiblePhotos, setVisiblePhotos] = useState([]);
 
+  const isExpired =
+    subscriptionExpiresAt &&
+    new Date(subscriptionExpiresAt).getTime() < new Date().getTime();
+
   useEffect(() => {
+    if (!profileUser?._id) return;
+
     const fetchProfileData = async () => {
       try {
         const token = await AsyncStorage.getItem('auth');
         const response = await axios.get(`${API_BASE_URL}/api/users/${profileUser._id}`, {
           headers: {
-            Authorization: `Bearer ${token}`
-          }
+            Authorization: `Bearer ${token}`,
+          },
         });
-        
+
         setProfileData(response.data);
+
+        const shouldLimit =
+          !isSubscribed || isExpired || profileUser._id !== currentUser._id;
+
         setVisiblePhotos(
-          isSubscribed 
-            ? response.data.profileImages 
-            : response.data.profileImages.slice(0, 7)
+          shouldLimit ? response.data.profileImages.slice(0, 7) : response.data.profileImages
         );
       } catch (error) {
         console.error('Error fetching profile:', error);
+        Alert.alert('Error', 'Unable to fetch profile data.');
       } finally {
         setLoading(false);
       }
     };
 
     fetchProfileData();
-  }, [profileUser._id, isSubscribed]);
+  }, [profileUser?._id, isSubscribed, isExpired]);
+
+  if (!profileUser?._id) {
+    return (
+      <View style={styles.centered}>
+        <Text>No profile selected.</Text>
+      </View>
+    );
+  }
 
   if (loading) {
     return (
@@ -59,14 +91,26 @@ export default function ProfileScreen({ route }) {
     );
   }
 
+  const handleSubscriptionPress = () => {
+    setShowSubscribeModal(false);
+    navigation.navigate('subscribe');
+  };
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.name}>{profileData.name}</Text>
-        <Text style={styles.age}>{profileData.age || ''}</Text>
+        <Text style={styles.age}>{profileData.age ? `${profileData.age} years` : ''}</Text>
       </View>
 
       <Text style={styles.description}>{profileData.description || 'No description yet'}</Text>
+
+      {/* Show Subscribe Button if viewing own profile and subscription expired */}
+      {profileUser._id === currentUser._id && isExpired && (
+        <TouchableOpacity style={styles.renewButton} onPress={handleSubscriptionPress}>
+          <Text style={styles.renewButtonText}>Renew Subscription</Text>
+        </TouchableOpacity>
+      )}
 
       {/* Photo Gallery */}
       <View style={styles.photosContainer}>
@@ -76,15 +120,13 @@ export default function ProfileScreen({ route }) {
           numColumns={3}
           keyExtractor={(item, index) => index.toString()}
           renderItem={({ item }) => (
-            <Image 
-              source={{ uri: item }} 
-              style={styles.photo}
-              resizeMode="cover"
-            />
+            <Image source={{ uri: item }} style={styles.photo} resizeMode="cover" />
           )}
           ListFooterComponent={
-            !isSubscribed && profileData.profileImages.length > 7 && (
-              <TouchableOpacity 
+            profileUser._id !== currentUser._id &&
+            !isSubscribed &&
+            profileData.profileImages.length > 7 && (
+              <TouchableOpacity
                 style={styles.subscribeButton}
                 onPress={() => setShowSubscribeModal(true)}
               >
@@ -98,19 +140,17 @@ export default function ProfileScreen({ route }) {
       </View>
 
       {/* Like Button */}
-      <TouchableOpacity style={styles.likeButton}>
-        <Text style={styles.likeButtonText}>Like</Text>
-      </TouchableOpacity>
+      {profileUser._id !== currentUser._id && (
+        <TouchableOpacity style={styles.likeButton}>
+          <Text style={styles.likeButtonText}>Like</Text>
+        </TouchableOpacity>
+      )}
 
       {/* Subscription Modal */}
       <SubscribeOverlay
         visible={showSubscribeModal}
         message={`Subscribe to view all ${profileData.profileImages.length} photos`}
-        onSubscribe={() => {
-          setShowSubscribeModal(false);
-          // Navigate to subscription screen
-          navigation.navigate('Subscribe');
-        }}
+        onSubscribe={handleSubscriptionPress}
         onClose={() => setShowSubscribeModal(false)}
       />
     </View>
@@ -182,5 +222,16 @@ const styles = StyleSheet.create({
     color: 'white',
     fontWeight: 'bold',
     fontSize: 16,
+  },
+  renewButton: {
+    backgroundColor: '#FF6B6B',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+    alignItems: 'center',
+  },
+  renewButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
   },
 });

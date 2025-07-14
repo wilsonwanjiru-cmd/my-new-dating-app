@@ -1,5 +1,6 @@
+// frontend/app/_context/SubscriptionContext.js
 import { createContext, useContext, useState, useEffect } from 'react';
-import { checkSubscriptionStatus } from '../api/subscriptions';
+import { checkSubscriptionStatus } from '../_api/subscriptions'; // ✅ Updated path
 import { useAuth } from './AuthContext';
 
 const SubscriptionContext = createContext();
@@ -11,14 +12,18 @@ export function SubscriptionProvider({ children }) {
   useEffect(() => {
     const checkStatus = async () => {
       if (user?._id) {
-        const status = await checkSubscriptionStatus(user._id);
-        setIsSubscribed(status);
+        try {
+          const status = await checkSubscriptionStatus(user._id);
+          setIsSubscribed(status);
+        } catch (error) {
+          console.error('Error checking subscription status:', error);
+        }
       }
     };
-    
+
     checkStatus();
     const interval = setInterval(checkStatus, 1000 * 60 * 5); // Check every 5 minutes
-    
+
     return () => clearInterval(interval);
   }, [user?._id]);
 

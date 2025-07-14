@@ -6,28 +6,37 @@ export default function AuthLayout() {
     <Stack>
       {/* Login Screen */}
       <Stack.Screen
-        name="login"  // Note: lowercase for file-based routing
+        name="login"
         options={{
           title: 'Login',
-          headerShown: false
+          headerShown: false,
         }}
       />
 
       {/* Register Screen */}
       <Stack.Screen
-        name="register"  // Note: lowercase for file-based routing
+        name="register"
         options={{
           title: 'Register',
-          headerShown: false
+          headerShown: false,
         }}
       />
 
       {/* Select Screen */}
       <Stack.Screen
-        name="select"  // Note: lowercase for file-based routing
+        name="select"
         options={{
           title: 'Select',
-          headerShown: false
+          headerShown: false,
+        }}
+      />
+
+      {/* Subscribe Screen — ✅ Add this */}
+      <Stack.Screen
+        name="subscribe"
+        options={{
+          title: 'Subscribe',
+          headerShown: true, // or false if you want to hide it
         }}
       />
     </Stack>
