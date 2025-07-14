@@ -10,8 +10,10 @@ import {
   Button,
   FlatList,
   Alert,
+  ActivityIndicator,
+  TouchableOpacity
 } from "react-native";
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useContext } from "react";
 import { Entypo, AntDesign } from "@expo/vector-icons";
 import Carousel from "react-native-reanimated-carousel";
 import axios from "axios";
@@ -20,112 +22,85 @@ import { jwtDecode } from "jwt-decode";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import base64 from 'base-64';
 import { useAuth } from "../../_context/AuthContext";
+import { useNavigation } from "@react-navigation/native";
 
-// Use the environment variable for the backend URL
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://dating-app-3eba.onrender.com/";
 
 const BioScreen = () => {
-  const { user, isSubscribed } = useAuth();
-  const [option, setOption] = useState("AD");
+  const navigation = useNavigation();
+  const { user, isSubscribed, profiles, loadProfiles } = useAuth();
+  const [option, setOption] = useState("Photos");
   const [description, setDescription] = useState("");
   const [activeSlide, setActiveSlide] = useState(0);
   const [userId, setUserId] = useState("");
   const [selectedTurnOns, setSelectedTurnOns] = useState([]);
   const [lookingOptions, setLookingOptions] = useState([]);
   const [imageUrl, setImageUrl] = useState("");
-  const [images, setImages] = useState([
+  const [loading, setLoading] = useState(true);
+  const [selectedProfile, setSelectedProfile] = useState(null);
+  const [userImages, setUserImages] = useState([
     "https://images.pexels.com/photos/1042140/pexels-photo-1042140.jpeg?auto=compress&cs=tinysrgb&w=800",
     "https://images.pexels.com/photos/1215695/pexels-photo-1215695.jpeg?auto=compress&cs=tinysrgb&w=800",
     "https://images.pexels.com/photos/7580971/pexels-photo-7580971.jpeg?auto=compress&cs=tinysrgb&w=800",
   ]);
 
   const turnons = [
-    {
-      id: "0",
-      name: "Music",
-      description: "Pop Rock-Indie pick our sound track",
-    },
-    {
-      id: "10",
-      name: "Kissing",
-      description:
-        "It's a feeling of closeness, where every touch of lips creates a symphony of emotions.",
-    },
-    {
-      id: "1",
-      name: "Fantasies",
-      description:
-        "Fantasies can be deeply personal, encompassing diverse elements such as romance",
-    },
-    {
-      id: "2",
-      name: "Nibbling",
-      description:
-        "Playful form of biting or taking small, gentle bites, typically done with the teeth",
-    },
-    {
-      id: "3",
-      name: "Desire",
-      description: "Powerful emotion or attainment of a particular person.",
-    },
+    { id: "0", name: "Music", description: "Pop Rock-Indie pick our sound track" },
+    { id: "10", name: "Kissing", description: "It's a feeling of closeness, where every touch of lips creates a symphony of emotions." },
+    { id: "1", name: "Fantasies", description: "Fantasies can be deeply personal, encompassing diverse elements such as romance" },
+    { id: "2", name: "Nibbling", description: "Playful form of biting or taking small, gentle bites, typically done with the teeth" },
+    { id: "3", name: "Desire", description: "Powerful emotion or attainment of a particular person." },
   ];
 
   const data = [
-    {
-      id: "0",
-      name: "Casual",
-      description: "Let's keep it easy and see where it goes",
-    },
-    {
-      id: "1",
-      name: "Long Term",
-      description: "How about a one life stand",
-    },
-    {
-      id: "2",
-      name: "Virtual",
-      description: "Let's have some virtual fun",
-    },
-    {
-      id: "3",
-      name: "Open for Anything",
-      description: "Let's Vibe and see where it goes",
-    },
+    { id: "0", name: "Casual", description: "Let's keep it easy and see where it goes" },
+    { id: "1", name: "Long Term", description: "How about a one life stand" },
+    { id: "2", name: "Virtual", description: "Let's have some virtual fun" },
+    { id: "3", name: "Open for Anything", description: "Let's Vibe and see where it goes" },
   ];
 
   useEffect(() => {
-    const fetchUser = async () => {
+    const initialize = async () => {
       try {
+        // Load user ID
         const token = await AsyncStorage.getItem("auth");
         if (token) {
           const decodedToken = jwtDecode(token);
-          const userId = decodedToken.userId;
-          setUserId(userId);
+          setUserId(decodedToken.userId);
         }
+
+        // Load profiles
+        await loadProfiles();
       } catch (error) {
-        console.log("Error fetching user ID", error);
+        console.error("Initialization error:", error);
+      } finally {
+        setLoading(false);
       }
     };
 
-    fetchUser();
+    initialize();
   }, []);
+
+  useEffect(() => {
+    if (profiles && profiles.length > 0) {
+      setSelectedProfile(profiles[0]);
+    }
+  }, [profiles]);
 
   const fetchUserDescription = async () => {
     try {
       const token = await AsyncStorage.getItem("auth");
       const response = await axios.get(`${API_BASE_URL}/api/users/${userId}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${token}` },
       });
-      const user = response.data;
+      const userData = response.data;
 
-      setDescription(user?.description || "");
-      setSelectedTurnOns(user?.turnOns || []);
-      setImages(user?.profileImages || images); // Fallback to default images if none exist
-      setLookingOptions(user?.lookingFor || []);
+      setDescription(userData?.description || "");
+      setSelectedTurnOns(userData?.turnOns || []);
+      setUserImages(userData?.profileImages || userImages);
+      setLookingOptions(userData?.lookingFor || []);
     } catch (error) {
-      console.log("Error fetching user description", error);
+      console.error("Error fetching user description", error);
     }
   };
 
@@ -138,165 +113,21 @@ const BioScreen = () => {
   const updateUserDescription = async () => {
     try {
       const token = await AsyncStorage.getItem("auth");
-      const response = await axios.put(
+      await axios.put(
         `${API_BASE_URL}/api/users/${userId}/description`,
-        {
-          description: description,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
+        { description },
+        { headers: { Authorization: `Bearer ${token}` } }
       );
-
-      if (response.status === 200) {
-        Alert.alert("Success", "Description updated successfully");
-        fetchUserDescription(); // Refresh the user data
-      }
+      Alert.alert("Success", "Description updated successfully");
     } catch (error) {
-      console.log("Error updating the user description", error);
+      console.error("Error updating description", error);
       Alert.alert("Error", "Failed to update description");
     }
   };
 
-  const handleToggleTurnOn = (turnOn) => {
-    if (selectedTurnOns.includes(turnOn)) {
-      removeTurnOn(turnOn);
-    } else {
-      addTurnOn(turnOn);
-    }
-  };
-
-  const handleOption = (lookingFor) => {
-    if (lookingOptions.includes(lookingFor)) {
-      removeLookingFor(lookingFor);
-    } else {
-      addLookingFor(lookingFor);
-    }
-  };
-
-  const addLookingFor = async (lookingFor) => {
-    try {
-      const token = await AsyncStorage.getItem("auth");
-      const response = await axios.put(
-        `${API_BASE_URL}/api/users/${userId}/looking-for`,
-        {
-          lookingFor: lookingFor,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
-
-      if (response.status === 200) {
-        setLookingOptions([...lookingOptions, lookingFor]);
-      }
-    } catch (error) {
-      console.log("Error adding looking for", error);
-    }
-  };
-
-  const removeLookingFor = async (lookingFor) => {
-    try {
-      const token = await AsyncStorage.getItem("auth");
-      const response = await axios.put(
-        `${API_BASE_URL}/api/users/${userId}/looking-for/remove`,
-        {
-          lookingFor: lookingFor,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
-
-      if (response.status === 200) {
-        setLookingOptions(lookingOptions.filter((item) => item !== lookingFor));
-      }
-    } catch (error) {
-      console.log("Error removing looking for", error);
-    }
-  };
-
-  const addTurnOn = async (turnOn) => {
-    try {
-      const token = await AsyncStorage.getItem("auth");
-      const response = await axios.put(
-        `${API_BASE_URL}/api/users/${userId}/turn-ons/add`,
-        {
-          turnOn: turnOn,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
-
-      if (response.status === 200) {
-        setSelectedTurnOns([...selectedTurnOns, turnOn]);
-      }
-    } catch (error) {
-      console.log("Error adding turn on", error);
-    }
-  };
-
-  const removeTurnOn = async (turnOn) => {
-    try {
-      const token = await AsyncStorage.getItem("auth");
-      const response = await axios.put(
-        `${API_BASE_URL}/api/users/${userId}/turn-ons/remove`,
-        {
-          turnOn: turnOn,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
-
-      if (response.status === 200) {
-        setSelectedTurnOns(selectedTurnOns.filter((item) => item !== turnOn));
-      }
-    } catch (error) {
-      console.log("Error removing turn on", error);
-    }
-  };
-
-  const renderImageCarousel = ({ item }) => {
-    if (!item) return null; // Handle undefined items
-
-    return (
-      <View
-        style={{ width: "100%", justifyContent: "center", alignItems: "center" }}
-      >
-        <Image
-          style={{
-            width: "85%",
-            resizeMode: "cover",
-            height: 290,
-            borderRadius: 10,
-            transform: [{ rotate: "-5deg" }],
-          }}
-          source={{ uri: item }}
-        />
-        <Text
-          style={{ position: "absolute", top: 10, right: 10, color: "black" }}
-        >
-          {activeSlide + 1}/{images.length}
-        </Text>
-      </View>
-    );
-  };
-
   const handleAddImage = async () => {
     // Check subscription status and photo limit
-    if (!isSubscribed && images.length >= 7) {
+    if (!isSubscribed && userImages.length >= 7) {
       Alert.alert(
         "Upload Limit Reached",
         "Free users can only upload up to 7 photos. Please subscribe to upload more.",
@@ -315,39 +146,76 @@ const BioScreen = () => {
 
     try {
       const token = await AsyncStorage.getItem("auth");
-      const response = await axios.post(
+      await axios.post(
         `${API_BASE_URL}/api/users/${userId}/profile-images`,
-        {
-          imageUrl: imageUrl,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
+        { imageUrl },
+        { headers: { Authorization: `Bearer ${token}` } }
       );
-
-      if (response.status === 200) {
-        setImageUrl("");
-        fetchUserDescription(); // Refresh images after adding a new one
-        Alert.alert("Success", "Image added successfully");
-      }
+      setImageUrl("");
+      fetchUserDescription();
+      Alert.alert("Success", "Image added successfully");
     } catch (error) {
-      console.log("Error adding image", error);
+      console.error("Error adding image", error);
       Alert.alert("Error", "Failed to add image");
     }
   };
 
-  const getRandomImage = () => {
-    if (images.length === 0) return ""; // Handle empty images array
-    const randomIndex = Math.floor(Math.random() * images.length);
-    return images[randomIndex];
-  };
+  const renderImageCarousel = ({ item }) => (
+    <View style={{ width: "100%", justifyContent: "center", alignItems: "center" }}>
+      <Image
+        style={{
+          width: "85%",
+          resizeMode: "cover",
+          height: 290,
+          borderRadius: 10,
+          transform: [{ rotate: "-5deg" }],
+        }}
+        source={{ uri: item }}
+      />
+      <Text style={{ position: "absolute", top: 10, right: 10, color: "black" }}>
+        {activeSlide + 1}/{userImages.length}
+      </Text>
+    </View>
+  );
 
-  const randomImage = getRandomImage();
+  const renderProfileItem = ({ item }) => (
+    <TouchableOpacity 
+      onPress={() => setSelectedProfile(item)}
+      style={{ margin: 5 }}
+    >
+      <Image
+        source={{ uri: item.photos[0]?.url || "https://via.placeholder.com/100" }}
+        style={{
+          width: 80,
+          height: 80,
+          borderRadius: 40,
+          borderWidth: selectedProfile?.id === item.id ? 3 : 0,
+          borderColor: '#fd5c63'
+        }}
+      />
+      <Text style={{ textAlign: 'center', marginTop: 5 }}>{item.name}</Text>
+    </TouchableOpacity>
+  );
+
+  if (loading) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
+
+  if (!selectedProfile) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <Text>No profiles available</Text>
+      </View>
+    );
+  }
 
   return (
     <ScrollView>
+      {/* Profile Header */}
       <View>
         <Image
           style={{ width: "100%", height: 200, resizeMode: "cover" }}
@@ -356,120 +224,87 @@ const BioScreen = () => {
           }}
         />
         <View>
-          <View>
-            <Pressable
+          <Pressable
+            style={{
+              padding: 10,
+              backgroundColor: "#DDA0DD",
+              width: 300,
+              marginLeft: "auto",
+              marginRight: "auto",
+              justifyContent: "center",
+              alignItems: "center",
+              borderRadius: 10,
+              position: "absolute",
+              top: -60,
+              left: "50%",
+              transform: [{ translateX: -150 }],
+            }}
+          >
+            <Image
               style={{
-                padding: 10,
-                backgroundColor: "#DDA0DD",
-                width: 300,
-                marginLeft: "auto",
-                marginRight: "auto",
-                justifyContent: "center",
-                alignItems: "center",
-                borderRadius: 10,
-                position: "absolute",
-                top: -60,
-                left: "50%",
-                transform: [{ translateX: -150 }],
+                width: 60,
+                height: 60,
+                borderRadius: 30,
+                resizeMode: "cover",
               }}
-            >
-              <Image
-                style={{
-                  width: 60,
-                  height: 60,
-                  borderRadius: 30,
-                  resizeMode: "cover",
-                }}
-                source={{
-                  uri: randomImage || "https://via.placeholder.com/60",
-                }}
-              />
-              <Text style={{ fontSize: 16, fontWeight: "600", marginTop: 6 }}>
-                Bangalore
-              </Text>
-              <Text style={{ marginTop: 4, fontSize: 15 }}>
-                22 years 110 days
-              </Text>
-            </Pressable>
-          </View>
+              source={{
+                uri: selectedProfile.photos[0]?.url || "https://via.placeholder.com/60",
+              }}
+            />
+            <Text style={{ fontSize: 16, fontWeight: "600", marginTop: 6 }}>
+              {selectedProfile.name}
+            </Text>
+            <Text style={{ marginTop: 4, fontSize: 15 }}>
+              {selectedProfile.age || 'Unknown'} years
+            </Text>
+          </Pressable>
         </View>
       </View>
 
-      <View
-        style={{
-          marginTop: 80,
-          marginHorizontal: 20,
-          flexDirection: "row",
-          alignItems: "center",
-          gap: 25,
-          justifyContent: "center",
-        }}
-      >
+      {/* Profile Selection */}
+      {profiles.length > 1 && (
+        <FlatList
+          horizontal
+          data={profiles}
+          renderItem={renderProfileItem}
+          keyExtractor={item => item.id}
+          contentContainerStyle={{ padding: 10 }}
+        />
+      )}
+
+      {/* Options Tabs */}
+      <View style={{ marginTop: 20, marginHorizontal: 20, flexDirection: "row", alignItems: "center", gap: 25, justifyContent: "center" }}>
         <Pressable onPress={() => setOption("AD")}>
-          <Text
-            style={{
-              fontSize: 16,
-              fontWeight: "500",
-              color: option === "AD" ? "black" : "gray",
-            }}
-          >
+          <Text style={{ fontSize: 16, fontWeight: "500", color: option === "AD" ? "black" : "gray" }}>
             AD
           </Text>
         </Pressable>
         <Pressable onPress={() => setOption("Photos")}>
-          <Text
-            style={{
-              fontSize: 16,
-              fontWeight: "500",
-              color: option === "Photos" ? "black" : "gray",
-            }}
-          >
+          <Text style={{ fontSize: 16, fontWeight: "500", color: option === "Photos" ? "black" : "gray" }}>
             Photos
           </Text>
         </Pressable>
         <Pressable onPress={() => setOption("Turn-ons")}>
-          <Text
-            style={{
-              fontSize: 16,
-              fontWeight: "500",
-              color: option === "Turn-ons" ? "black" : "gray",
-            }}
-          >
+          <Text style={{ fontSize: 16, fontWeight: "500", color: option === "Turn-ons" ? "black" : "gray" }}>
             Turn-ons
           </Text>
         </Pressable>
         <Pressable onPress={() => setOption("Looking For")}>
-          <Text
-            style={{
-              fontSize: 16,
-              fontWeight: "500",
-              color: option === "Looking For" ? "black" : "gray",
-            }}
-          >
+          <Text style={{ fontSize: 16, fontWeight: "500", color: option === "Looking For" ? "black" : "gray" }}>
             Looking For
           </Text>
         </Pressable>
       </View>
 
-      <View style={{ marginHorizontal: 14, marginVertical: 15 }}>
-        {option === "AD" && (
-          <View
-            style={{
-              borderColor: "#202020",
-              borderWidth: 1,
-              padding: 10,
-              borderRadius: 10,
-              height: 300,
-            }}
-          >
+      {/* AD Section */}
+      {option === "AD" && (
+        <View style={{ marginHorizontal: 14, marginVertical: 15 }}>
+          <View style={{ borderColor: "#202020", borderWidth: 1, padding: 10, borderRadius: 10, height: 300 }}>
             <TextInput
               value={description}
               multiline
-              onChangeText={(text) => setDescription(text)}
-              style={{
-                fontFamily: "Helvetica",
-                fontSize: description ? 17 : 17,
-              }}
+              onChangeText={setDescription}
+              style={{ fontFamily: "Helvetica", fontSize: description ? 17 : 17 }}
               placeholder="Write your AD for people to like you"
             />
             <Pressable
@@ -485,60 +320,46 @@ const BioScreen = () => {
                 padding: 10,
               }}
             >
-              <Text
-                style={{
-                  color: "white",
-                  textAlign: "center",
-                  fontSize: 15,
-                  fontWeight: "500",
-                }}
-              >
+              <Text style={{ color: "white", textAlign: "center", fontSize: 15, fontWeight: "500" }}>
                 Publish in feed
               </Text>
               <Entypo name="mask" size={24} color="white" />
             </Pressable>
           </View>
-        )}
-      </View>
+        </View>
+      )}
 
-      <View style={{ marginHorizontal: 14 }}>
-        {option === "Photos" && (
-          <View>
-            <Carousel
-              data={images}
-              renderItem={renderImageCarousel}
-              sliderWidth={350}
-              itemWidth={300}
-              onSnapToItem={(index) => setActiveSlide(index)}
-            />
+      {/* Photos Section */}
+      {option === "Photos" && (
+        <View style={{ marginHorizontal: 14 }}>
+          <Carousel
+            data={isSubscribed ? selectedProfile.photos : selectedProfile.photos.slice(0, 7)}
+            renderItem={renderImageCarousel}
+            sliderWidth={350}
+            itemWidth={300}
+            onSnapToItem={setActiveSlide}
+          />
 
+          {!isSubscribed && selectedProfile.photos.length > 7 && (
+            <Text style={{ textAlign: 'center', marginVertical: 10, color: '#fd5c63' }}>
+              Subscribe to view all {selectedProfile.photos.length} photos
+            </Text>
+          )}
+
+          {/* Image Upload Section (only for current user) */}
+          {selectedProfile.id === userId && (
             <View style={{ marginTop: 25 }}>
               <Text style={{ fontSize: 16, fontWeight: "500" }}>Add a picture of yourself</Text>
               {!isSubscribed && (
                 <Text style={{ color: '#fd5c63', marginBottom: 5 }}>
-                  {7 - images.length} photos remaining (7 max for free users)
+                  {7 - userImages.length} photos remaining (7 max for free users)
                 </Text>
               )}
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 5,
-                  paddingVertical: 5,
-                  borderRadius: 5,
-                  marginTop: 10,
-                  backgroundColor: "#DCDCDC",
-                }}
-              >
-                <Entypo
-                  style={{ marginLeft: 8 }}
-                  name="image"
-                  size={24}
-                  color="gray"
-                />
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 5, borderRadius: 5, marginTop: 10, backgroundColor: "#DCDCDC" }}>
+                <Entypo style={{ marginLeft: 8 }} name="image" size={24} color="gray" />
                 <TextInput
                   value={imageUrl}
-                  onChangeText={(text) => setImageUrl(text)}
+                  onChangeText={setImageUrl}
                   style={{ color: "gray", marginVertical: 10, width: 300 }}
                   placeholder="Enter your image URL"
                 />
@@ -550,134 +371,90 @@ const BioScreen = () => {
                   backgroundColor: "#fd5c63",
                   padding: 10,
                   borderRadius: 5,
-                  opacity: (!isSubscribed && images.length >= 7) ? 0.5 : 1
+                  opacity: (!isSubscribed && userImages.length >= 7) ? 0.5 : 1
                 }}
-                disabled={!isSubscribed && images.length >= 7}
+                disabled={!isSubscribed && userImages.length >= 7}
               >
                 <Text style={{ color: "white", textAlign: "center" }}>Add Image</Text>
               </Pressable>
             </View>
-          </View>
-        )}
-      </View>
+          )}
+        </View>
+      )}
 
-      <View style={{ marginHorizontal: 14 }}>
-        {option === "Turn-ons" && (
-          <View>
-            {turnons?.map((item, index) => (
+      {/* Turn-ons Section */}
+      {option === "Turn-ons" && (
+        <View style={{ marginHorizontal: 14 }}>
+          {turnons?.map((item, index) => (
+            <Pressable
+              onPress={() => {
+                if (selectedTurnOns.includes(item.name)) {
+                  setSelectedTurnOns(selectedTurnOns.filter(t => t !== item.name));
+                } else {
+                  setSelectedTurnOns([...selectedTurnOns, item.name]);
+                }
+              }}
+              style={{
+                backgroundColor: selectedTurnOns.includes(item.name) ? "#fd5c63" : "#FFFDD0",
+                padding: 10,
+                marginVertical: 10,
+                borderRadius: 5,
+              }}
+              key={index}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
+                <Text style={{ textAlign: "center", fontSize: 15, fontWeight: "bold", flex: 1, color: selectedTurnOns.includes(item.name) ? "white" : "black" }}>
+                  {item.name}
+                </Text>
+                {selectedTurnOns.includes(item.name) && <AntDesign name="checkcircle" size={18} color="white" />}
+              </View>
+              <Text style={{ marginTop: 4, fontSize: 15, color: selectedTurnOns.includes(item.name) ? "white" : "gray", textAlign: "center" }}>
+                {item.description}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
+
+      {/* Looking For Section */}
+      {option === "Looking For" && (
+        <View style={{ marginHorizontal: 14 }}>
+          <FlatList
+            columnWrapperStyle={{ justifyContent: "space-between" }}
+            numColumns={2}
+            data={data}
+            renderItem={({ item }) => (
               <Pressable
-                onPress={() => handleToggleTurnOn(item?.name)}
-                style={{
-                  backgroundColor: selectedTurnOns.includes(item?.name)
-                    ? "#fd5c63"
-                    : "#FFFDD0",
-                  padding: 10,
-                  marginVertical: 10,
-                  borderRadius: 5,
+                onPress={() => {
+                  if (lookingOptions.includes(item.name)) {
+                    setLookingOptions(lookingOptions.filter(o => o !== item.name));
+                  } else {
+                    setLookingOptions([...lookingOptions, item.name]);
+                  }
                 }}
-                key={index}
+                style={{
+                  backgroundColor: lookingOptions.includes(item.name) ? "#fd5c63" : "white",
+                  padding: 16,
+                  justifyContent: "center",
+                  alignItems: "center",
+                  width: 150,
+                  margin: 10,
+                  borderRadius: 5,
+                  borderColor: "#fd5c63",
+                  borderWidth: lookingOptions.includes(item.name) ? 0 : 0.7,
+                }}
               >
-                <View
-                  style={{
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <Text
-                    style={{
-                      textAlign: "center",
-                      fontSize: 15,
-                      fontWeight: "bold",
-                      flex: 1,
-                      color: selectedTurnOns.includes(item?.name)
-                        ? "white"
-                        : "black",
-                    }}
-                  >
-                    {item?.name}
-                  </Text>
-                  {selectedTurnOns.includes(item?.name) && (
-                    <AntDesign name="checkcircle" size={18} color="white" />
-                  )}
-                </View>
-                <Text
-                  style={{
-                    marginTop: 4,
-                    fontSize: 15,
-                    color: selectedTurnOns.includes(item?.name)
-                      ? "white"
-                      : "gray",
-                    textAlign: "center",
-                  }}
-                >
-                  {item?.description}
+                <Text style={{ textAlign: "center", fontWeight: "500", fontSize: 13, color: lookingOptions.includes(item.name) ? "white" : "black" }}>
+                  {item.name}
+                </Text>
+                <Text style={{ color: lookingOptions.includes(item.name) ? "white" : "gray", textAlign: "center", width: 140, marginTop: 10, fontSize: 13 }}>
+                  {item.description}
                 </Text>
               </Pressable>
-            ))}
-          </View>
-        )}
-      </View>
-
-      <View style={{ marginHorizontal: 14 }}>
-        {option === "Looking For" && (
-          <>
-            <View>
-              <FlatList
-                columnWrapperStyle={{ justifyContent: "space-between" }}
-                numColumns={2}
-                data={data}
-                renderItem={({ item }) => (
-                  <Pressable
-                    onPress={() => handleOption(item?.name)}
-                    style={{
-                      backgroundColor: lookingOptions.includes(item?.name)
-                        ? "#fd5c63"
-                        : "white",
-                      padding: 16,
-                      justifyContent: "center",
-                      alignItems: "center",
-                      width: 150,
-                      margin: 10,
-                      borderRadius: 5,
-                      borderColor: "#fd5c63",
-                      borderWidth: lookingOptions.includes(item?.name)
-                        ? 0
-                        : 0.7,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        textAlign: "center",
-                        fontWeight: "500",
-                        fontSize: 13,
-                        color: lookingOptions.includes(item?.name)
-                          ? "white"
-                          : "black",
-                      }}
-                    >
-                      {item?.name}
-                    </Text>
-                    <Text
-                      style={{
-                        color: lookingOptions.includes(item?.name)
-                          ? "white"
-                          : "gray",
-                        textAlign: "center",
-                        width: 140,
-                        marginTop: 10,
-                        fontSize: 13,
-                      }}
-                    >
-                      {item?.description}
-                    </Text>
-                  </Pressable>
-                )}
-              />
-            </View>
-          </>
-        )}
-      </View>
+            )}
+          />
+        </View>
+      )}
     </ScrollView>
   );
 };

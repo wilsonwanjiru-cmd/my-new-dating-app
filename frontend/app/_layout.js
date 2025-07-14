@@ -1,21 +1,21 @@
 // frontend/app/_layout.js
-import React from 'react';
-import { Stack } from 'expo-router';
-import { View, StatusBar } from 'react-native';
+import { Slot } from 'expo-router';
 import { AuthProvider } from './_context/AuthContext';
+import { SubscriptionProvider } from './_context/SubscriptionContext';
+import { SocketProvider } from './_context/SocketContext';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { StatusBar } from 'react-native';
 import Toast from 'react-native-toast-message';
-import { SubscriptionProvider } from './_context/SubscriptionContext';
-import { SocketProvider } from './_context/SocketContext';
 
-// Create a client for React Query
+// Create a query client for React Query
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 1000 * 60 * 5, // 5 minutes
+      staleTime: 1000 * 60 * 5, // 5 minutes cache time
       retry: 2, // Retry failed queries twice
+      refetchOnWindowFocus: false, // Disable refetch on window focus
     },
   },
 });
@@ -29,40 +29,15 @@ export default function RootLayout() {
             <SocketProvider>
               <SubscriptionProvider>
                 <StatusBar 
-                  barStyle="dark-content" 
-                  backgroundColor="transparent" 
-                  translucent 
+                  barStyle="dark-content"
+                  backgroundColor="transparent"
+                  translucent
                 />
-                <View style={{ flex: 1 }}>
-                  <Stack
-                    screenOptions={{
-                      animation: 'fade',
-                      fullScreenGestureEnabled: true,
-                    }}
-                  >
-                    <Stack.Screen 
-                      name="(authenticate)" 
-                      options={{ 
-                        headerShown: false,
-                        gestureEnabled: false // Disable swipe back on auth screens
-                      }} 
-                    />
-                    <Stack.Screen 
-                      name="(tabs)" 
-                      options={{ 
-                        headerShown: false,
-                        gestureEnabled: true
-                      }} 
-                    />
-                    <Stack.Screen 
-                      name="subscribe" 
-                      options={{ 
-                        title: 'Premium Subscription',
-                        presentation: 'modal'
-                      }} 
-                    />
-                  </Stack>
-                </View>
+                
+                {/* Main app content */}
+                <Slot />
+
+                {/* Toast notifications */}
                 <Toast />
               </SubscriptionProvider>
             </SocketProvider>
