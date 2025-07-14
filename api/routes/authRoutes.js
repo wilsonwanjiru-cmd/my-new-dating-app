@@ -4,25 +4,16 @@ const authController = require('../controllers/authController');
 const rateLimit = require('express-rate-limit');
 const { body } = require('express-validator');
 
-// ===== POSTMAN TESTING CONFIG ===== //
-/*
-  Postman Collection Setup:
-  1. Create new collection "Dating App Auth"
-  2. Add environment variables:
-     - base_url: http://localhost:5000/api/auth
-     - test_token: {{after successful login}}
-  3. Save this collection as JSON for team sharing
-*/
-
+// Rate limiting configuration
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20, // Limit each IP to 20 requests per windowMs
   message: {
     success: false,
     code: 'RATE_LIMITED',
-    message: 'Too many attempts. Wait 15 minutes.'
+    message: 'Too many attempts. Please try again in 15 minutes.'
   },
-  skip: (req) => process.env.NODE_ENV === 'test' // Disable for tests
+  skip: (req) => process.env.NODE_ENV === 'test'
 });
 
 // ==================== VALIDATION MIDDLEWARES ==================== //
@@ -35,19 +26,22 @@ const validateRegistration = [
     .isEmail()
     .normalizeEmail()
     .withMessage('Invalid email address'),
+  body('phoneNumber')
+    .matches(/^\+?254[0-9]{9}$/)
+    .withMessage('Valid Kenyan phone number required (+254XXXXXXXXX)'),
   body('password')
     .isLength({ min: 8 })
     .withMessage('Password must be 8+ characters')
     .matches(/[!@#$%^&*]/)
-    .withMessage('Password must contain a special character (!@#$%^&*)')
+    .withMessage('Password must contain a special character')
     .matches(/[A-Z]/)
-    .withMessage('Password must contain at least one uppercase letter')
+    .withMessage('Password must contain an uppercase letter')
     .matches(/[0-9]/)
-    .withMessage('Password must contain at least one number'),
+    .withMessage('Password must contain a number'),
   body('gender')
     .optional()
-    .isIn(['male', 'female', 'other'])
-    .withMessage('Gender must be male, female or other')
+    .isIn(['male', 'female', 'non-binary', 'prefer-not-to-say'])
+    .withMessage('Invalid gender selection')
 ];
 
 const validateLogin = [
@@ -59,83 +53,71 @@ const validateLogin = [
     .withMessage('Password is required')
 ];
 
-// ==================== POSTMAN-READY ENDPOINTS ==================== //
+// ==================== AUTH ROUTES ==================== //
 
 /**
  * @route POST /register
- * @desc Register new user (no email verification)
+ * @desc Register new user with M-Pesa compatible phone number
  * @access Public
- * @body {name, email, password, [gender]}
- * 
- * Postman Test:
- * 1. Method: POST
- * 2. URL: {{base_url}}/register
- * 3. Body (raw JSON):
- * {
- *   "name": "Test User",
- *   "email": "test@example.com",
- *   "password": "ValidPass123!",
- *   "gender": "male"
- * }
- * 
- * Test Cases:
- * - Omit name → 400 error
- * - Invalid email → 400 error
- * - Weak password → 400 error
  */
 router.post(
   '/register',
   authLimiter,
   validateRegistration,
-  authController.registerUser
+  authController.register
 );
 
 /**
  * @route POST /login
- * @desc Authenticate existing user
+ * @desc Authenticate user and return JWT token
  * @access Public
- * @body {email, password}
- * 
- * Postman Test:
- * 1. Method: POST
- * 2. URL: {{base_url}}/login
- * 3. Body (raw JSON):
- * {
- *   "email": "test@example.com",
- *   "password": "ValidPass123!"
- * }
- * 4. Add this to Tests tab:
- * if (pm.response.code === 200) {
- *   pm.environment.set("test_token", pm.response.json().token);
- * }
  */
 router.post(
   '/login',
   authLimiter,
   validateLogin,
-  authController.loginUser
+  authController.login
+);
+
+/**
+ * @route GET /verify-token
+ * @desc Verify JWT token validity
+ * @access Private
+ */
+router.get(
+  '/verify-token',
+  authController.verifyToken
+);
+
+/**
+ * @route POST /subscribe
+ * @desc Initiate M-Pesa payment for subscription
+ * @access Private
+ */
+router.post(
+  '/subscribe',
+  authController.authenticate,
+  authController.initiateSubscription
+);
+
+/**
+ * @route POST /mpesa-callback
+ * @desc Handle M-Pesa payment callback
+ * @access Public (called by M-Pesa)
+ */
+router.post(
+  '/mpesa-callback',
+  authController.handlePaymentCallback
 );
 
 /**
  * @route GET /me
- * @desc Get current user profile
+ * @desc Get current authenticated user profile
  * @access Private
- * @headers Authorization: Bearer <token>
- * 
- * Postman Test:
- * 1. Method: GET
- * 2. URL: {{base_url}}/me
- * 3. Headers:
- *    Key: Authorization
- *    Value: Bearer {{test_token}}
- * 
- * Test Cases:
- * - No token → 401 error
- * - Invalid token → 401 error
  */
 router.get(
   '/me',
-  authController.verifyToken,
+  authController.authenticate,
   authController.getCurrentUser
 );
 

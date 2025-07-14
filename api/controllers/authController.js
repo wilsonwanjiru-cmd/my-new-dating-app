@@ -1,224 +1,416 @@
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
-const bcrypt = require("bcrypt");
+const bcrypt = require("bcryptjs");
 const User = require("../models/user");
+const { initiateSTKPush } = require("../utils/mpesaUtils");
 
-const secretKey = process.env.JWT_SECRET || crypto.randomBytes(32).toString("hex");
-const SALT_ROUNDS = parseInt(process.env.SALT_ROUNDS) || 10;
+// Configuration
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(64).toString("hex");
+const SALT_ROUNDS = parseInt(process.env.SALT_ROUNDS) || 12;
+const SUBSCRIPTION_AMOUNT = 10; // KES 10
+const SUBSCRIPTION_DURATION = 24 * 60 * 60 * 1000; // 24 hours in ms
 
-// Register User
-exports.registerUser = async (req, res) => {
+// Helper function to sanitize user data
+const sanitizeUser = (user) => {
+  const userObj = user.toObject();
+  delete userObj.password;
+  delete userObj.verificationTokens;
+  delete userObj.__v;
+  return userObj;
+};
+
+// Enhanced Registration with additional security
+exports.register = async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password, phoneNumber } = req.body;
 
-    // Validate input
-    if (!name || !email || !password) {
-      return res.status(400).json({ 
-        success: false,
-        message: "All fields are required",
-        code: "MISSING_FIELDS"
-      });
-    }
-
-    // Validate email format
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    // Validation
+    if (!name || !email || !password || !phoneNumber) {
       return res.status(400).json({
         success: false,
-        message: "Invalid email format",
-        code: "INVALID_EMAIL"
+        code: "MISSING_FIELDS",
+        message: "All fields are required"
       });
     }
 
-    // Check if user already exists
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(409).json({ 
+    if (!/^\+?254[0-9]{9}$/.test(phoneNumber)) {
+      return res.status(400).json({
         success: false,
-        message: "User already exists",
-        code: "USER_EXISTS"
+        code: "INVALID_PHONE",
+        message: "Valid Kenyan phone number required (+254XXXXXXXXX)"
       });
     }
 
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+    // Check existing user
+    const existingUser = await User.findOne({ $or: [{ email }, { phoneNumber }] });
+    if (existingUser) {
+      const field = existingUser.email === email ? "email" : "phoneNumber";
+      return res.status(409).json({
+        success: false,
+        code: `${field.toUpperCase()}_EXISTS`,
+        message: `${field} already registered`
+      });
+    }
 
-    // Create and save user
-    const newUser = await User.create({
+    // Create user
+    const user = await User.create({
       name,
       email,
-      password: hashedPassword
+      password: await bcrypt.hash(password, SALT_ROUNDS),
+      phoneNumber,
+      location: {
+        type: "Point",
+        coordinates: [36.8219, -1.2921] // Default Nairobi coordinates
+      }
     });
 
-    // Generate JWT token
+    // Generate token
     const token = jwt.sign(
       { 
-        userId: newUser._id,
-        email: newUser.email
+        userId: user._id,
+        phoneNumber: user.phoneNumber,
+        isSubscribed: false
       },
-      secretKey,
+      JWT_SECRET,
       { expiresIn: "24h" }
     );
 
-    // Omit sensitive data from response
-    const userResponse = {
-      id: newUser._id,
-      name: newUser.name,
-      email: newUser.email,
-      createdAt: newUser.createdAt
-    };
-
-    res.status(201).json({ 
+    res.status(201).json({
       success: true,
       message: "Registration successful",
       token,
-      user: userResponse
+      user: sanitizeUser(user)
     });
 
   } catch (error) {
     console.error("Registration error:", error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
+      code: "REGISTRATION_FAILED",
       message: "Registration failed",
-      code: "SERVER_ERROR",
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === "development" ? error.message : undefined
     });
   }
 };
 
-// Login User
-exports.loginUser = async (req, res) => {
+// Enhanced Login with security logging
+exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Validate input
     if (!email || !password) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: "Email and password are required",
-        code: "MISSING_CREDENTIALS"
+        code: "MISSING_CREDENTIALS",
+        message: "Email and password required"
       });
     }
 
-    // Find user by email
-    const user = await User.findOne({ email }).select("+password");
+    const user = await User.findOne({ email }).select("+password +loginCount");
     if (!user) {
-      return res.status(401).json({ 
+      return res.status(401).json({
         success: false,
-        message: "Invalid credentials",
-        code: "INVALID_CREDENTIALS"
+        code: "INVALID_CREDENTIALS",
+        message: "Invalid credentials"
       });
     }
 
-    // Verify password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      return res.status(401).json({ 
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({
         success: false,
-        message: "Invalid credentials",
-        code: "INVALID_CREDENTIALS"
+        code: "INVALID_CREDENTIALS",
+        message: "Invalid credentials"
       });
     }
 
-    // Generate JWT token
+    // Update login stats
+    user.loginCount += 1;
+    user.lastLogin = new Date();
+    await user.save();
+
+    // Generate token with subscription status
+    const isSubscribed = user.subscription?.isActive && 
+                         new Date(user.subscription.expiresAt) > new Date();
+
     const token = jwt.sign(
-      { 
-        userId: user._id, 
-        email: user.email,
-        role: user.role || 'user'
+      {
+        userId: user._id,
+        isSubscribed,
+        expiresAt: user.subscription?.expiresAt
       },
-      secretKey,
+      JWT_SECRET,
       { expiresIn: "24h" }
     );
 
-    // Omit sensitive data from response
-    const userResponse = {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      createdAt: user.createdAt
-    };
-
-    res.status(200).json({ 
+    res.status(200).json({
       success: true,
+      message: "Login successful",
       token,
-      user: userResponse
+      user: sanitizeUser(user)
     });
 
   } catch (error) {
     console.error("Login error:", error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
+      code: "LOGIN_FAILED",
       message: "Login failed",
-      code: "SERVER_ERROR",
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === "development" ? error.message : undefined
     });
   }
 };
 
-// Token Verification Middleware
-exports.verifyToken = async (req, res, next) => {
-  const token = req.header('Authorization')?.replace('Bearer ', '');
-  
-  if (!token) {
-    return res.status(401).json({ 
-      success: false,
-      message: "Access denied. No token provided.",
-      code: "NO_TOKEN"
-    });
-  }
-
+// Token Verification with enhanced checks
+exports.verifyToken = async (req, res) => {
   try {
-    const decoded = jwt.verify(token, secretKey);
-    
-    // Verify user still exists
-    const user = await User.findById(decoded.userId);
-    if (!user) {
-      return res.status(401).json({ 
+    const token = req.headers.authorization?.split(" ")[1];
+    if (!token) {
+      return res.status(401).json({
         success: false,
-        message: "User not found",
-        code: "USER_NOT_FOUND"
+        code: "NO_TOKEN",
+        message: "Authorization token required"
       });
     }
 
-    req.user = {
-      id: user._id,
-      email: user.email,
-      role: user.role || 'user'
-    };
-    
-    next();
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.userId);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        code: "USER_NOT_FOUND",
+        message: "User not found"
+      });
+    }
+
+    const isSubscribed = user.subscription?.isActive && 
+                         new Date(user.subscription.expiresAt) > new Date();
+
+    res.status(200).json({
+      success: true,
+      valid: true,
+      user: {
+        id: user._id,
+        isSubscribed,
+        subscriptionExpiresAt: user.subscription?.expiresAt,
+        freeUploadsUsed: user.freeUploadsUsed || 0
+      }
+    });
+
   } catch (error) {
-    res.status(401).json({ 
+    res.status(401).json({
       success: false,
+      code: "INVALID_TOKEN",
       message: "Invalid or expired token",
-      code: "INVALID_TOKEN"
+      valid: false
     });
   }
 };
 
-// Get Current User
-exports.getCurrentUser = async (req, res) => {
+// M-Pesa Subscription with enhanced validation
+exports.initiateSubscription = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('-password');
-    
+    const user = await User.findById(req.user.id);
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: "User not found",
-        code: "USER_NOT_FOUND"
+        code: "USER_NOT_FOUND",
+        message: "User not found"
+      });
+    }
+
+    // Check existing subscription
+    if (user.subscription?.isActive && new Date(user.subscription.expiresAt) > new Date()) {
+      return res.status(400).json({
+        success: false,
+        code: "ACTIVE_SUBSCRIPTION",
+        message: "You already have an active subscription"
+      });
+    }
+
+    // Initiate payment
+    const paymentData = {
+      phoneNumber: user.phoneNumber,
+      amount: SUBSCRIPTION_AMOUNT,
+      accountReference: `Ruda-${user._id}`,
+      transactionDesc: "Ruda Dating Premium Subscription"
+    };
+
+    const stkResponse = await initiateSTKPush(paymentData);
+
+    res.status(200).json({
+      success: true,
+      message: "Payment initiated",
+      data: stkResponse
+    });
+
+  } catch (error) {
+    console.error("Subscription error:", error);
+    res.status(500).json({
+      success: false,
+      code: "SUBSCRIPTION_FAILED",
+      message: "Subscription initiation failed",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined
+    });
+  }
+};
+
+// Enhanced M-Pesa Callback Handler
+exports.handlePaymentCallback = async (req, res) => {
+  try {
+    const { Body: { stkCallback: callback } } = req.body;
+    
+    if (callback.ResultCode !== 0) {
+      console.error("Payment failed:", callback.ResultDesc);
+      return res.status(400).json({
+        success: false,
+        code: "PAYMENT_FAILED",
+        message: callback.ResultDesc
+      });
+    }
+
+    // Extract payment details
+    const metadata = callback.CallbackMetadata?.Item || [];
+    const getMetadataValue = (name) => metadata.find(item => item.Name === name)?.Value;
+
+    const amount = getMetadataValue("Amount");
+    const mpesaCode = getMetadataValue("MpesaReceiptNumber");
+    const phoneNumber = getMetadataValue("PhoneNumber");
+    const accountReference = getMetadataValue("AccountReference");
+
+    if (!amount || !mpesaCode || !phoneNumber || !accountReference) {
+      return res.status(400).json({
+        success: false,
+        code: "INVALID_CALLBACK",
+        message: "Invalid payment data"
+      });
+    }
+
+    // Validate payment amount
+    if (parseInt(amount) !== SUBSCRIPTION_AMOUNT) {
+      return res.status(400).json({
+        success: false,
+        code: "INVALID_AMOUNT",
+        message: `Payment amount must be KES ${SUBSCRIPTION_AMOUNT}`
+      });
+    }
+
+    // Find and update user
+    const userId = accountReference.replace("Ruda-", "");
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        code: "USER_NOT_FOUND",
+        message: "User account not found"
+      });
+    }
+
+    // Update subscription
+    const expiresAt = new Date(Date.now() + SUBSCRIPTION_DURATION);
+    user.subscription = {
+      isActive: true,
+      expiresAt,
+      lastPayment: {
+        amount: SUBSCRIPTION_AMOUNT,
+        date: new Date(),
+        mpesaCode,
+        phoneNumber
+      },
+      paymentHistory: [
+        ...(user.subscription?.paymentHistory || []),
+        {
+          amount: SUBSCRIPTION_AMOUNT,
+          date: new Date(),
+          mpesaCode,
+          phoneNumber
+        }
+      ]
+    };
+
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Subscription activated"
+    });
+
+  } catch (error) {
+    console.error("Callback error:", error);
+    res.status(500).json({
+      success: false,
+      code: "CALLBACK_ERROR",
+      message: "Error processing payment"
+    });
+  }
+};
+
+// Authentication Middleware with enhanced security
+exports.authenticate = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith("Bearer ")) {
+      return res.status(401).json({
+        success: false,
+        code: "INVALID_AUTH_HEADER",
+        message: "Bearer token required"
+      });
+    }
+
+    const token = authHeader.split(" ")[1];
+    const decoded = jwt.verify(token, JWT_SECRET);
+    
+    const user = await User.findById(decoded.userId);
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        code: "USER_NOT_FOUND",
+        message: "User account not found"
+      });
+    }
+
+    // Check token expiration
+    if (decoded.exp < Date.now() / 1000) {
+      return res.status(401).json({
+        success: false,
+        code: "TOKEN_EXPIRED",
+        message: "Session expired"
+      });
+    }
+
+    req.user = user;
+    next();
+  } catch (error) {
+    res.status(401).json({
+      success: false,
+      code: "AUTH_FAILED",
+      message: "Authentication failed"
+    });
+  }
+};
+
+// Get Current User Profile
+exports.getCurrentUser = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        code: "USER_NOT_FOUND",
+        message: "User not found"
       });
     }
 
     res.status(200).json({
       success: true,
-      user
+      user: sanitizeUser(user)
     });
   } catch (error) {
-    console.error("Get current user error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to get user data",
-      code: "SERVER_ERROR"
+      code: "SERVER_ERROR",
+      message: "Failed to fetch user data"
     });
   }
 };
