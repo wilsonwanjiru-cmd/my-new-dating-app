@@ -4,13 +4,13 @@ const ValidateRequest = require("../middlewares/validateRequest");
 const { checkSubscription, restrictFreeUsers } = require("../middlewares/subscriptionMiddleware");
 const { authenticate } = require("../middlewares/authMiddleware");
 
-// ✅ Import all controllers directly
+// Import controllers
 const UserController = require("../controllers/userController");
 const MatchController = require("../controllers/matchController");
 const NotificationController = require("../controllers/notificationController");
 const PaymentController = require("../controllers/paymentController");
 
-// ✅ Method validator
+// Method validator
 const verifyMethod = (controller, methodName) => {
   if (!controller) throw new Error(`Controller is undefined`);
   const fn = controller[methodName];
@@ -20,7 +20,7 @@ const verifyMethod = (controller, methodName) => {
   return fn;
 };
 
-// ✅ Route creator
+// Route creator
 const createRoute = (handler, ...middlewares) => {
   const validated = middlewares.map(mw => {
     if (typeof mw !== 'function') throw new Error(`Invalid middleware: ${mw}`);
@@ -30,7 +30,26 @@ const createRoute = (handler, ...middlewares) => {
   return [...validated, handler];
 };
 
+// ========== Debug Middleware ==========
+router.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  next();
+});
+
 // ========== User Profile ==========
+router.put("/:userId/gender",
+  (req, res, next) => {
+    console.log(`Gender update request for ${req.params.userId}`);
+    next();
+  },
+  ...createRoute(
+    verifyMethod(UserController, 'updateGender'),
+    authenticate,
+    ValidateRequest.validateObjectId,
+    ValidateRequest.validateGenderUpdate
+  )
+);
+
 router.get("/:userId",
   ...createRoute(
     verifyMethod(UserController, 'getProfile'),
@@ -146,6 +165,26 @@ router.delete("/:userId",
     ValidateRequest.validateObjectId
   )
 );
+
+// ========== Test Endpoint ==========
+router.put("/test-gender", (req, res) => {
+  console.log("Test gender endpoint hit");
+  res.json({ 
+    success: true,
+    message: "Test endpoint working",
+    data: req.body
+  });
+});
+
+// ========== Route Debug ==========
+console.log("\n✅ Registered User Routes:");
+router.stack.forEach(layer => {
+  if (layer.route) {
+    const methods = Object.keys(layer.route.methods).map(m => m.toUpperCase()).join(', ');
+    console.log(`  ${methods.padEnd(6)} ${layer.route.path}`);
+  }
+});
+console.log("");
 
 // ========== Error Handler ==========
 router.use((err, req, res, next) => {

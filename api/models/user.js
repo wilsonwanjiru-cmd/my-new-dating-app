@@ -4,7 +4,7 @@ const bcrypt = require('bcrypt');
 const { formatDistanceToNow } = require('date-fns');
 
 const userSchema = new mongoose.Schema({
-  // Basic Information (unchanged)
+  // Basic Information
   name: {
     type: String,
     required: [true, 'Name is required'],
@@ -38,7 +38,41 @@ const userSchema = new mongoose.Schema({
     }
   },
 
-  // [Previous profile information fields remain unchanged...]
+  // Profile Information
+  gender: {
+    type: String,
+    enum: ['male', 'female', 'non-binary', 'prefer-not-to-say'],
+    required: false
+  },
+  age: {
+    type: Number,
+    min: [18, 'You must be at least 18 years old'],
+    max: [100, 'Age cannot exceed 100 years']
+  },
+  description: {
+    type: String,
+    maxlength: [500, 'Description cannot exceed 500 characters']
+  },
+  profileImages: [{
+    type: String,
+    validate: {
+      validator: v => validator.isURL(v, { protocols: ['http','https'], require_protocol: true }),
+      message: 'Invalid image URL'
+    }
+  }],
+  location: {
+    type: {
+      type: String,
+      default: 'Point',
+      enum: ['Point']
+    },
+    coordinates: [Number], // [longitude, latitude]
+    address: String
+  },
+  lastActive: {
+    type: Date,
+    default: Date.now
+  },
 
   // Subscription Info - M-Pesa Only
   subscription: {
@@ -54,14 +88,14 @@ const userSchema = new mongoose.Schema({
         }
       },
       date: { type: Date, default: null },
-      mpesaCode: { // Changed from transactionId to mpesaCode
+      mpesaCode: {
         type: String,
         validate: {
           validator: v => /^[A-Z0-9]{10}$/.test(v), // MPesa transaction code format
           message: 'Invalid M-Pesa transaction code'
         }
       },
-      phoneNumber: { // Store the paying phone number
+      phoneNumber: {
         type: String,
         validate: {
           validator: v => /^\+?254[0-9]{9}$/.test(v),
@@ -83,7 +117,71 @@ const userSchema = new mongoose.Schema({
     max: 7
   },
 
-  // [Rest of your schema remains unchanged...]
+  // Social Features
+  likesReceived: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  matches: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  crushes: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  preferences: {
+    gender: {
+      type: String,
+      enum: ['male', 'female', 'non-binary', 'any'],
+      default: 'any'
+    },
+    ageRange: {
+      min: { type: Number, default: 18, min: 18 },
+      max: { type: Number, default: 100, max: 100 }
+    },
+    distance: { // in kilometers
+      type: Number,
+      default: 50,
+      min: 1,
+      max: 1000
+    }
+  },
+
+  // Notifications
+  notifications: [{
+    type: {
+      type: String,
+      enum: ['new_like', 'new_match', 'new_message', 'subscription_expiry']
+    },
+    from: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    message: String,
+    read: {
+      type: Boolean,
+      default: false
+    },
+    requiresSubscription: {
+      type: Boolean,
+      default: false
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+
+  // Account Verification
+  isVerified: {
+    type: Boolean,
+    default: false
+  },
+  verificationToken: String,
+  verificationTokenExpires: Date,
+  resetToken: String,
+  resetTokenExpires: Date
 
 }, {
   timestamps: true,
@@ -91,18 +189,50 @@ const userSchema = new mongoose.Schema({
     virtuals: true,
     transform: (doc, ret) => {
       delete ret.password;
-      delete ret.verificationTokens;
+      delete ret.verificationToken;
+      delete ret.resetToken;
       delete ret.__v;
       return ret;
     }
   }
 });
 
-// [Previous indexes, virtuals, and methods remain unchanged...]
+// Indexes
+userSchema.index({ email: 1 }, { unique: true });
+userSchema.index({ location: '2dsphere' });
+userSchema.index({ lastActive: -1 });
+
+// Password hashing middleware
+userSchema.pre('save', async function(next) {
+  if (!this.isModified('password')) return next();
+  
+  try {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Method to compare passwords
+userSchema.methods.comparePassword = async function(candidatePassword) {
+  return await bcrypt.compare(candidatePassword, this.password);
+};
+
+// Virtual for subscription status
+userSchema.virtual('subscriptionStatus').get(function() {
+  return {
+    isActive: this.subscription?.isActive && new Date(this.subscription.expiresAt) > new Date(),
+    expiresAt: this.subscription?.expiresAt,
+    timeRemaining: this.subscription?.expiresAt 
+      ? formatDistanceToNow(new Date(this.subscription.expiresAt))
+      : null
+  };
+});
 
 // Add M-Pesa specific method
 userSchema.methods.initiateMpesaPayment = async function() {
-  // This would call your M-Pesa API integration
   return {
     phoneNumber: this.phoneNumber,
     amount: 10,

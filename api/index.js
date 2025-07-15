@@ -109,12 +109,25 @@ const apiLimiter = rateLimit({
 });
 app.use('/api', apiLimiter);
 
-// ==================== Route Loading ====================
+// ==================== Enhanced Route Loading ====================
 const loadRoutes = () => {
+  console.log('🔍 Loading routes...');
+  
+  // Load user routes first with debug logging
+  const userRouter = require('./routes/userRoutes');
+  app.use('/api/users', userRouter);
+  console.log('✅ User routes loaded. Registered endpoints:');
+  userRouter.stack.forEach(layer => {
+    if (layer.route) {
+      const methods = Object.keys(layer.route.methods).map(m => m.toUpperCase()).join(', ');
+      console.log(`  ${methods.padEnd(6)} ${layer.route.path}`);
+    }
+  });
+
+  // Load other routes
   const routes = [
     { path: '/api/health', file: './routes/healthRoutes' },
     { path: '/api/auth', file: './routes/authRoutes' },
-    { path: '/api/users', file: './routes/userRoutes' },
     { path: '/api/chat', file: './routes/chatRoutes' },
     { path: '/api/matches', file: './routes/matchRoutes' },
     { path: '/api/messages', file: './routes/messageRoutes' },
@@ -125,6 +138,9 @@ const loadRoutes = () => {
 
   routes.forEach(route => {
     try {
+      // Skip userRoutes as we already loaded them
+      if (route.path === '/api/users') return;
+      
       const router = require(route.file);
       app.use(route.path, router);
       console.log(`✅ Route loaded: ${route.path}`);
@@ -143,10 +159,13 @@ const initializeDatabase = async () => {
   try {
     await mongoose.connect(process.env.MONGODB_URI, {
       serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 45000
+      socketTimeoutMS: 45000,
+      connectTimeoutMS: 10000
     });
 
     console.log('✅ MongoDB connected successfully');
+    console.log(`📊 Database: ${mongoose.connection.db.databaseName}`);
+    console.log(`📚 Collections: ${(await mongoose.connection.db.listCollections().toArray()).map(c => c.name).join(', ')}`);
 
     mongoose.connection.on('error', err => {
       console.error('❌ MongoDB connection error:', err);
@@ -155,9 +174,6 @@ const initializeDatabase = async () => {
     mongoose.connection.on('disconnected', () => {
       console.warn('⚠️ MongoDB disconnected');
     });
-
-    const ping = await mongoose.connection.db.admin().ping();
-    console.log('📊 MongoDB pinged successfully:', ping);
 
     return true;
   } catch (err) {
@@ -170,57 +186,66 @@ const initializeDatabase = async () => {
 const startServer = async () => {
   try {
     console.log('🚀 Starting server initialization...');
+    console.log(`⏳ Environment: ${process.env.NODE_ENV || 'development'}`);
 
     const dbConnected = await initializeDatabase();
-    if (!dbConnected) {
-      console.warn('⚠️ Starting with degraded functionality - database not connected');
+    if (!dbConnected && IS_PRODUCTION) {
+      console.error('❌ Critical: Failed to connect to database in production');
+      process.exit(1);
     }
 
     loadRoutes();
 
+    // Health check endpoint
     app.get('/health', (req, res) => {
       res.json({
         status: 'ok',
         timestamp: new Date().toISOString(),
         environment: process.env.NODE_ENV || 'development',
         dbStatus: mongoose.connection?.readyState === 1 ? 'connected' : 'disconnected',
-        uptime: process.uptime()
+        uptime: process.uptime(),
+        memoryUsage: process.memoryUsage()
       });
     });
 
-    app.get('/favicon.ico', (req, res) => res.sendStatus(204));
-
+    // 404 Handler
     app.use((req, res) => {
+      console.warn(`⚠️ 404: ${req.method} ${req.path}`);
       res.status(404).json({
         success: false,
         message: 'Endpoint not found',
-        path: req.path
+        path: req.path,
+        suggestion: 'Check /health for available services'
       });
     });
 
+    // Error handler
     app.use((err, req, res, next) => {
       const statusCode = err.status || 500;
-      const errorResponse = {
+      console.error(`❌ ${statusCode} ${req.method} ${req.path}`, err);
+      
+      res.status(statusCode).json({
         success: false,
         message: err.message || 'Internal server error',
         timestamp: new Date().toISOString(),
-        path: req.path
-      };
-
-      if (!IS_PRODUCTION) {
-        errorResponse.stack = err.stack;
-      }
-
-      console.error(`[${statusCode}] ${req.method} ${req.url}`, err);
-      res.status(statusCode).json(errorResponse);
+        path: req.path,
+        ...(!IS_PRODUCTION && { stack: err.stack })
+      });
     });
 
     server.listen(PORT, HOST, () => {
       console.log(`
+███████╗███████╗██████╗ ██╗   ██╗███████╗██████╗ 
+██╔════╝██╔════╝██╔══██╗██║   ██║██╔════╝██╔══██╗
+███████╗█████╗  ██████╔╝██║   ██║█████╗  ██████╔╝
+╚════██║██╔══╝  ██╔══██╗╚██╗ ██╔╝██╔══╝  ██╔══██╗
+███████║███████╗██║  ██║ ╚████╔╝ ███████╗██║  ██║
+╚══════╝╚══════╝╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝
+                                                  
 ✅ Server running at ${API_BASE_URL}
-Environment: ${process.env.NODE_ENV || 'development'}
-MongoDB: ${mongoose.connection?.readyState === 1 ? 'connected' : 'disconnected'}
-Socket.IO: ${io ? 'enabled' : 'disabled'}
+🔌 MongoDB: ${mongoose.connection?.readyState === 1 ? 'connected' : 'disconnected'}
+📡 Socket.IO: ${io ? 'enabled' : 'disabled'}
+📊 Environment: ${process.env.NODE_ENV || 'development'}
       `);
     });
 

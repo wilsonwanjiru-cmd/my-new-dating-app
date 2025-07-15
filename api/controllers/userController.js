@@ -30,6 +30,42 @@ const handleError = (error, res) => {
 
 const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
 
+// ========== Gender Update ==========
+const updateGender = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { gender } = req.body;
+
+    if (!isValidId(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid user ID"
+      });
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { gender },
+      { new: true, runValidators: true }
+    ).select('-password -__v');
+
+    if (!updatedUser) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Gender updated successfully",
+      data: updatedUser
+    });
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
 // 1. Process Daily Subscription (KES 10 for 24 hours)
 const processSubscription = async (req, res) => {
   try {
@@ -562,6 +598,7 @@ const deleteUserAccount = async (req, res) => {
 
 // Export all methods
 module.exports = {
+  updateGender, // Added the new gender update method
   processSubscription,
   updateDescription,
   getDescription,
