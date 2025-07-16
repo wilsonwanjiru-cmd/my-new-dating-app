@@ -1,4 +1,3 @@
-// app/(tabs)/profile/index.js
 // frontend/app/(tabs)/profile/index.js
 import React, { useState, useEffect } from 'react';
 import {
@@ -9,7 +8,9 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  Alert
+  Alert,
+  Modal,
+  TextInput
 } from 'react-native';
 import { useAuth } from '../../_context/AuthContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -18,23 +19,23 @@ import Constants from 'expo-constants';
 import { useNavigation } from 'expo-router';
 import SubscribeOverlay from '../../../components/SubscribeOverlay';
 
-const API_BASE_URL =
-  Constants.expoConfig?.extra?.apiBaseUrl || 'https://dating-app-3eba.onrender.com';
+const API_BASE_URL = Constants.expoConfig?.extra?.apiBaseUrl || 'https://dating-app-3eba.onrender.com';
 
 export default function ProfileScreen({ route }) {
   const navigation = useNavigation();
-  const { user: routeUser } = route?.params || {}; // selected profile
-  const { user: currentUser, isSubscribed, subscriptionExpiresAt } = useAuth();
+  const { user: routeUser } = route?.params || {};
+  const { user: currentUser, isSubscribed, subscriptionExpiresAt, updateUser } = useAuth();
 
-  const profileUser = routeUser || currentUser; // fallback to self
+  const profileUser = routeUser || currentUser;
   const [showSubscribeModal, setShowSubscribeModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [profileData, setProfileData] = useState(null);
   const [visiblePhotos, setVisiblePhotos] = useState([]);
+  const [showGenderModal, setShowGenderModal] = useState(false);
+  const [selectedGender, setSelectedGender] = useState('');
+  const [updatingGender, setUpdatingGender] = useState(false);
 
-  const isExpired =
-    subscriptionExpiresAt &&
-    new Date(subscriptionExpiresAt).getTime() < new Date().getTime();
+  const isExpired = subscriptionExpiresAt && new Date(subscriptionExpiresAt).getTime() < new Date().getTime();
 
   useEffect(() => {
     if (!profileUser?._id) return;
@@ -49,12 +50,11 @@ export default function ProfileScreen({ route }) {
         });
 
         setProfileData(response.data);
-
-        const shouldLimit =
-          !isSubscribed || isExpired || profileUser._id !== currentUser._id;
-
+        setSelectedGender(response.data.gender || '');
         setVisiblePhotos(
-          shouldLimit ? response.data.profileImages.slice(0, 7) : response.data.profileImages
+          (!isSubscribed || isExpired || profileUser._id !== currentUser._id) 
+            ? response.data.profileImages.slice(0, 7) 
+            : response.data.profileImages
         );
       } catch (error) {
         console.error('Error fetching profile:', error);
@@ -66,6 +66,41 @@ export default function ProfileScreen({ route }) {
 
     fetchProfileData();
   }, [profileUser?._id, isSubscribed, isExpired]);
+
+  const handleGenderUpdate = async () => {
+    if (!selectedGender || selectedGender === profileData?.gender) {
+      setShowGenderModal(false);
+      return;
+    }
+
+    try {
+      setUpdatingGender(true);
+      const token = await AsyncStorage.getItem('auth');
+      const response = await axios.put(
+        `${API_BASE_URL}/api/users/${currentUser._id}/gender`,
+        { gender: selectedGender },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      setProfileData(prev => ({ ...prev, gender: selectedGender }));
+      updateUser({ ...currentUser, gender: selectedGender });
+      Alert.alert('Success', 'Gender updated successfully');
+      setShowGenderModal(false);
+    } catch (error) {
+      console.error('Gender update error:', error);
+      Alert.alert(
+        'Error', 
+        error.response?.data?.message || 'Failed to update gender'
+      );
+    } finally {
+      setUpdatingGender(false);
+    }
+  };
 
   if (!profileUser?._id) {
     return (
@@ -96,6 +131,8 @@ export default function ProfileScreen({ route }) {
     navigation.navigate('subscribe');
   };
 
+  const isOwnProfile = profileUser._id === currentUser._id;
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -103,16 +140,34 @@ export default function ProfileScreen({ route }) {
         <Text style={styles.age}>{profileData.age ? `${profileData.age} years` : ''}</Text>
       </View>
 
+      {/* Gender Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Gender</Text>
+        {isOwnProfile ? (
+          <TouchableOpacity 
+            onPress={() => setShowGenderModal(true)}
+            style={styles.editField}
+          >
+            <Text style={styles.fieldValue}>
+              {profileData.gender || 'Not specified'}
+              <Text style={styles.editText}> (Edit)</Text>
+            </Text>
+          </TouchableOpacity>
+        ) : (
+          <Text style={styles.fieldValue}>
+            {profileData.gender || 'Not specified'}
+          </Text>
+        )}
+      </View>
+
       <Text style={styles.description}>{profileData.description || 'No description yet'}</Text>
 
-      {/* Show Subscribe Button if viewing own profile and subscription expired */}
-      {profileUser._id === currentUser._id && isExpired && (
+      {isOwnProfile && isExpired && (
         <TouchableOpacity style={styles.renewButton} onPress={handleSubscriptionPress}>
           <Text style={styles.renewButtonText}>Renew Subscription</Text>
         </TouchableOpacity>
       )}
 
-      {/* Photo Gallery */}
       <View style={styles.photosContainer}>
         <Text style={styles.sectionTitle}>Photos</Text>
         <FlatList
@@ -123,9 +178,7 @@ export default function ProfileScreen({ route }) {
             <Image source={{ uri: item }} style={styles.photo} resizeMode="cover" />
           )}
           ListFooterComponent={
-            profileUser._id !== currentUser._id &&
-            !isSubscribed &&
-            profileData.profileImages.length > 7 && (
+            !isOwnProfile && !isSubscribed && profileData.profileImages.length > 7 && (
               <TouchableOpacity
                 style={styles.subscribeButton}
                 onPress={() => setShowSubscribeModal(true)}
@@ -139,14 +192,63 @@ export default function ProfileScreen({ route }) {
         />
       </View>
 
-      {/* Like Button */}
-      {profileUser._id !== currentUser._id && (
+      {!isOwnProfile && (
         <TouchableOpacity style={styles.likeButton}>
           <Text style={styles.likeButtonText}>Like</Text>
         </TouchableOpacity>
       )}
 
-      {/* Subscription Modal */}
+      {/* Gender Update Modal */}
+      <Modal
+        visible={showGenderModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowGenderModal(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Update Gender</Text>
+            
+            <View style={styles.genderOptions}>
+              {['male', 'female', 'non-binary', 'prefer-not-to-say'].map(gender => (
+                <TouchableOpacity
+                  key={gender}
+                  style={[
+                    styles.genderOption,
+                    selectedGender === gender && styles.selectedGenderOption
+                  ]}
+                  onPress={() => setSelectedGender(gender)}
+                >
+                  <Text style={styles.genderOptionText}>
+                    {gender.charAt(0).toUpperCase() + gender.slice(1)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity 
+                style={styles.cancelButton}
+                onPress={() => setShowGenderModal(false)}
+              >
+                <Text style={styles.buttonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.updateButton}
+                onPress={handleGenderUpdate}
+                disabled={updatingGender}
+              >
+                {updatingGender ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.buttonText}>Update</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <SubscribeOverlay
         visible={showSubscribeModal}
         message={`Subscribe to view all ${profileData.profileImages.length} photos`}
@@ -158,79 +260,82 @@ export default function ProfileScreen({ route }) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    padding: 16,
-    backgroundColor: '#fff',
+  // ... (keep all your existing styles)
+
+  section: {
+    marginBottom: 16,
   },
-  centered: {
+  editField: {
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: '#f5f5f5',
+  },
+  fieldValue: {
+    fontSize: 16,
+    color: '#333',
+  },
+  editText: {
+    color: '#007AFF',
+    fontSize: 14,
+  },
+  modalContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
   },
-  header: {
+  modalContent: {
+    width: '80%',
+    backgroundColor: 'white',
+    borderRadius: 10,
+    padding: 20,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  genderOptions: {
+    marginBottom: 20,
+  },
+  genderOption: {
+    padding: 12,
+    marginVertical: 4,
+    borderRadius: 8,
+    backgroundColor: '#f5f5f5',
+  },
+  selectedGenderOption: {
+    backgroundColor: '#007AFF',
+  },
+  genderOptionText: {
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  selectedGenderOptionText: {
+    color: 'white',
+  },
+  modalButtons: {
     flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
+    justifyContent: 'space-between',
   },
-  name: {
-    fontSize: 24,
-    fontWeight: 'bold',
+  cancelButton: {
+    flex: 1,
+    padding: 12,
     marginRight: 8,
-  },
-  age: {
-    fontSize: 18,
-    color: '#666',
-  },
-  description: {
-    fontSize: 16,
-    marginBottom: 24,
-    color: '#444',
-  },
-  photosContainer: {
-    marginBottom: 24,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 12,
-  },
-  photo: {
-    width: '32%',
-    aspectRatio: 1,
-    margin: '0.5%',
     borderRadius: 8,
+    backgroundColor: '#ccc',
+    alignItems: 'center',
   },
-  subscribeButton: {
-    backgroundColor: '#FF6B6B',
+  updateButton: {
+    flex: 1,
     padding: 12,
+    marginLeft: 8,
     borderRadius: 8,
-    marginTop: 12,
+    backgroundColor: '#007AFF',
     alignItems: 'center',
   },
-  subscribeButtonText: {
-    color: 'white',
-    fontWeight: 'bold',
-  },
-  likeButton: {
-    backgroundColor: '#4CAF50',
-    padding: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  likeButtonText: {
-    color: 'white',
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
-  renewButton: {
-    backgroundColor: '#FF6B6B',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 16,
-    alignItems: 'center',
-  },
-  renewButtonText: {
+  buttonText: {
     color: 'white',
     fontWeight: 'bold',
   },
