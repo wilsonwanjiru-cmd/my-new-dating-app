@@ -20,7 +20,6 @@ const PORT = parseInt(process.env.PORT) || 5000;
 const HOST = process.env.HOST || '0.0.0.0';
 const API_BASE_URL = process.env.API_BASE_URL || `http://${HOST}:${PORT}`;
 
-// ✅ Check for MONGODB_URI
 if (!process.env.MONGODB_URI) {
   console.error('❌ MONGODB_URI is missing in environment variables');
   if (IS_PRODUCTION) process.exit(1);
@@ -42,7 +41,6 @@ require('./sockets/notificationSocket')(io);
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
-
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
   if (!IS_PRODUCTION) process.exit(1);
@@ -109,22 +107,15 @@ const apiLimiter = rateLimit({
 });
 app.use('/api', apiLimiter);
 
-// ==================== Enhanced Route Loading ====================
+// ==================== Route Loader ====================
 const loadRoutes = () => {
   console.log('🔍 Loading routes...');
-  
-  // Load user routes first with debug logging
+
+  // Load user routes first
   const userRouter = require('./routes/userRoutes');
   app.use('/api/users', userRouter);
-  console.log('✅ User routes loaded. Registered endpoints:');
-  userRouter.stack.forEach(layer => {
-    if (layer.route) {
-      const methods = Object.keys(layer.route.methods).map(m => m.toUpperCase()).join(', ');
-      console.log(`  ${methods.padEnd(6)} ${layer.route.path}`);
-    }
-  });
+  console.log('✅ User routes loaded.');
 
-  // Load other routes
   const routes = [
     { path: '/api/health', file: './routes/healthRoutes' },
     { path: '/api/auth', file: './routes/authRoutes' },
@@ -138,9 +129,7 @@ const loadRoutes = () => {
 
   routes.forEach(route => {
     try {
-      // Skip userRoutes as we already loaded them
       if (route.path === '/api/users') return;
-      
       const router = require(route.file);
       app.use(route.path, router);
       console.log(`✅ Route loaded: ${route.path}`);
@@ -153,7 +142,7 @@ const loadRoutes = () => {
   });
 };
 
-// ==================== Database Initialization ====================
+// ==================== DB Init ====================
 const initializeDatabase = async () => {
   console.log('🔄 Connecting to MongoDB...');
   try {
@@ -163,40 +152,31 @@ const initializeDatabase = async () => {
       connectTimeoutMS: 10000
     });
 
-    console.log('✅ MongoDB connected successfully');
+    console.log('✅ MongoDB connected');
     console.log(`📊 Database: ${mongoose.connection.db.databaseName}`);
-    console.log(`📚 Collections: ${(await mongoose.connection.db.listCollections().toArray()).map(c => c.name).join(', ')}`);
-
-    mongoose.connection.on('error', err => {
-      console.error('❌ MongoDB connection error:', err);
-    });
-
-    mongoose.connection.on('disconnected', () => {
-      console.warn('⚠️ MongoDB disconnected');
-    });
+    mongoose.connection.on('error', err => console.error('❌ DB Error:', err));
+    mongoose.connection.on('disconnected', () => console.warn('⚠️ DB Disconnected'));
 
     return true;
   } catch (err) {
-    console.error('❌ Initial connection failed:', err);
+    console.error('❌ MongoDB Connection Failed:', err);
     return false;
   }
 };
 
-// ==================== Server Initialization ====================
+// ==================== Start Server ====================
 const startServer = async () => {
   try {
-    console.log('🚀 Starting server initialization...');
-    console.log(`⏳ Environment: ${process.env.NODE_ENV || 'development'}`);
-
+    console.log('🚀 Initializing server...');
     const dbConnected = await initializeDatabase();
+
     if (!dbConnected && IS_PRODUCTION) {
-      console.error('❌ Critical: Failed to connect to database in production');
+      console.error('❌ Critical: DB connection failed in production.');
       process.exit(1);
     }
 
     loadRoutes();
 
-    // Health check endpoint
     app.get('/health', (req, res) => {
       res.json({
         status: 'ok',
@@ -208,9 +188,8 @@ const startServer = async () => {
       });
     });
 
-    // 404 Handler
     app.use((req, res) => {
-      console.warn(`⚠️ 404: ${req.method} ${req.path}`);
+      console.warn(`⚠️ 404 Not Found: ${req.method} ${req.path}`);
       res.status(404).json({
         success: false,
         message: 'Endpoint not found',
@@ -219,11 +198,9 @@ const startServer = async () => {
       });
     });
 
-    // Error handler
     app.use((err, req, res, next) => {
       const statusCode = err.status || 500;
       console.error(`❌ ${statusCode} ${req.method} ${req.path}`, err);
-      
       res.status(statusCode).json({
         success: false,
         message: err.message || 'Internal server error',
@@ -235,43 +212,30 @@ const startServer = async () => {
 
     server.listen(PORT, HOST, () => {
       console.log(`
-███████╗███████╗██████╗ ██╗   ██╗███████╗██████╗ 
-██╔════╝██╔════╝██╔══██╗██║   ██║██╔════╝██╔══██╗
-███████╗█████╗  ██████╔╝██║   ██║█████╗  ██████╔╝
-╚════██║██╔══╝  ██╔══██╗╚██╗ ██╔╝██╔══╝  ██╔══██╗
-███████║███████╗██║  ██║ ╚████╔╝ ███████╗██║  ██║
-╚══════╝╚══════╝╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝
-                                                  
-✅ Server running at ${API_BASE_URL}
-🔌 MongoDB: ${mongoose.connection?.readyState === 1 ? 'connected' : 'disconnected'}
+✅ Server is running at ${API_BASE_URL}
 📡 Socket.IO: ${io ? 'enabled' : 'disabled'}
 📊 Environment: ${process.env.NODE_ENV || 'development'}
+🔌 MongoDB: ${mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'}
       `);
     });
 
   } catch (err) {
-    console.error('❌ Server initialization failed:', err);
+    console.error('❌ Server startup failed:', err);
     process.exit(1);
   }
 };
 
-// ==================== Graceful Shutdown ====================
+// ==================== Shutdown Hook ====================
 const shutdown = async () => {
-  console.log('🛑 Received shutdown signal');
+  console.log('🛑 Shutting down...');
   try {
-    console.log('Closing HTTP server...');
     await new Promise(resolve => server.close(resolve));
-
-    console.log('Closing database connections...');
     await mongoose.disconnect();
-
-    console.log('Closing Socket.IO...');
     io.close();
-
-    console.log('✅ Server shutdown complete');
+    console.log('✅ Graceful shutdown complete.');
     process.exit(0);
   } catch (err) {
-    console.error('⚠️ Error during shutdown:', err);
+    console.error('⚠️ Shutdown error:', err);
     process.exit(1);
   }
 };
@@ -279,5 +243,4 @@ const shutdown = async () => {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-// ==================== Start the Server ====================
 startServer();

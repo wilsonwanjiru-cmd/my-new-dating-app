@@ -64,10 +64,33 @@ const userSchema = new mongoose.Schema({
     type: {
       type: String,
       default: 'Point',
-      enum: ['Point']
+      enum: ['Point'],
+      required: true
     },
-    coordinates: [Number], // [longitude, latitude]
-    address: String
+    coordinates: {
+      type: [Number],
+      required: true,
+      validate: {
+        validator: function(v) {
+          return Array.isArray(v) && 
+                 v.length === 2 && 
+                 typeof v[0] === 'number' && 
+                 typeof v[1] === 'number' &&
+                 v[0] >= -180 && v[0] <= 180 && // Valid longitude
+                 v[1] >= -90 && v[1] <= 90;     // Valid latitude
+        },
+        message: props => `Invalid coordinates: ${props.value}. Must be [longitude, latitude] with valid values`
+      },
+      default: [36.8219, -1.2921] // Default to Nairobi coordinates
+    },
+    address: {
+      type: String,
+      trim: true
+    },
+    lastUpdated: {
+      type: Date,
+      default: Date.now
+    }
   },
   lastActive: {
     type: Date,
@@ -202,6 +225,22 @@ userSchema.index({ email: 1 }, { unique: true });
 userSchema.index({ location: '2dsphere' });
 userSchema.index({ lastActive: -1 });
 
+// Middleware to ensure valid location data - FIXED VERSION
+userSchema.pre('save', function(next) {
+  if (this.isModified('location') && this.location) {
+    // Ensure coordinates array exists and has exactly 2 numbers
+    if (!Array.isArray(this.location.coordinates)) {
+      this.location.coordinates = [36.8219, -1.2921]; // Default to Nairobi
+    } else if (this.location.coordinates.length !== 2) {
+      this.location.coordinates = [36.8219, -1.2921]; // Default to Nairobi
+    }
+    
+    // Update lastUpdated timestamp
+    this.location.lastUpdated = new Date();
+  }
+  next();
+});
+
 // Password hashing middleware
 userSchema.pre('save', async function(next) {
   if (!this.isModified('password')) return next();
@@ -229,6 +268,12 @@ userSchema.virtual('subscriptionStatus').get(function() {
       ? formatDistanceToNow(new Date(this.subscription.expiresAt))
       : null
   };
+});
+
+// Virtual for formatted location
+userSchema.virtual('location.formatted').get(function() {
+  if (!this.location || !this.location.coordinates) return 'Location not set';
+  return `Lat: ${this.location.coordinates[1]}, Long: ${this.location.coordinates[0]}`;
 });
 
 // Add M-Pesa specific method
