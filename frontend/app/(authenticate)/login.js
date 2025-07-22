@@ -13,13 +13,10 @@ import {
   ScrollView,
   TouchableOpacity
 } from "react-native";
-import React, { useState, useEffect, useContext } from "react";
+import React, { useState, useEffect } from "react";
 import { MaterialIcons, AntDesign, Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import axios from "axios";
-import { API_BASE_URL } from "../_config";
-import { AuthContext } from '../_context/AuthContext';
+import { useAuth } from '../_context/AuthContext';
 
 const Login = () => {
   const [email, setEmail] = useState("");
@@ -28,17 +25,14 @@ const Login = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState("");
 
-  const { setUser, setToken, setIsSubscribed, setSubscriptionExpiresAt } =
-    useContext(AuthContext);
-
+  const { login, user } = useAuth();
   const router = useRouter();
   const CONNECTION_TIMEOUT = 15000;
 
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const token = await AsyncStorage.getItem("auth");
-        if (token) {
+        if (user) {
           router.replace("/(tabs)/profile");
         }
       } catch (error) {
@@ -46,7 +40,7 @@ const Login = () => {
       }
     };
     checkAuth();
-  }, []);
+  }, [user]);
 
   const handleLogin = async () => {
     if (!email.trim() || !password.trim()) {
@@ -58,37 +52,17 @@ const Login = () => {
     setConnectionStatus("Connecting to server...");
 
     try {
-      const response = await axios.post(
-        `${API_BASE_URL}/api/auth/login`,
-        {
-          email: email.trim(),
-          password: password.trim(),
-        },
-        {
-          headers: {
-            "Content-Type": "application/json",
-            "X-Connection-Source": "Mobile-App",
-          },
-          timeout: CONNECTION_TIMEOUT,
-        }
-      );
+      const result = await login({
+        email: email.trim(),
+        password: password.trim()
+      });
 
-      const { user, token } = response.data;
-
-      // Save in AsyncStorage
-      await AsyncStorage.multiSet([
-        ["auth", token],
-        ["user", JSON.stringify(user)],
-      ]);
-
-      // Update Auth Context
-      setUser(user);
-      setToken(token);
-      setIsSubscribed(user.isSubscribed);
-      setSubscriptionExpiresAt(user.subscriptionExpiresAt);
-
-      setConnectionStatus("Login successful");
-      router.replace("/(authenticate)/select");
+      if (result.success) {
+        setConnectionStatus("Login successful");
+        router.replace("/(tabs)/profile");
+      } else {
+        handleLoginError(new Error(result.error || "Login failed"));
+      }
     } catch (error) {
       handleLoginError(error);
     } finally {
@@ -98,23 +72,37 @@ const Login = () => {
 
   const handleLoginError = (error) => {
     let errorMessage = "An error occurred during login.";
+    let statusMessage = "Error";
 
     if (error.response) {
-      if (error.response.status === 401) {
-        errorMessage = "Invalid email or password.";
-      } else if (error.response.status >= 500) {
-        errorMessage = "Server error. Please try again later.";
+      switch (error.response.status) {
+        case 404:
+          errorMessage = "API endpoint not found. Please contact support.";
+          statusMessage = "Endpoint not found";
+          break;
+        case 401:
+          errorMessage = "Invalid email or password.";
+          statusMessage = "Unauthorized";
+          break;
+        case 500:
+          errorMessage = "Server error. Please try again later.";
+          statusMessage = "Server error";
+          break;
+        default:
+          errorMessage = error.response.data?.message || "Login failed";
+          statusMessage = `Error ${error.response.status}`;
       }
-      setConnectionStatus(`Server error: ${error.response.status}`);
     } else if (error.code === "ECONNABORTED") {
-      errorMessage =
-        "Connection timeout. Please check your internet connection.";
-      setConnectionStatus("Connection timeout");
+      errorMessage = "Connection timeout. Please check your internet connection.";
+      statusMessage = "Connection timeout";
+    } else if (error.message.includes("Network Error")) {
+      errorMessage = "Network error. Please check your internet connection.";
+      statusMessage = "Network error";
     } else {
-      errorMessage = error.message || "Network error occurred.";
-      setConnectionStatus("Network error");
+      errorMessage = error.message || "An unexpected error occurred.";
     }
 
+    setConnectionStatus(statusMessage);
     Alert.alert("Login Failed", errorMessage);
   };
 
@@ -142,7 +130,10 @@ const Login = () => {
           keyboardShouldPersistTaps="handled"
         >
           {connectionStatus ? (
-            <View style={styles.connectionStatus}>
+            <View style={[
+              styles.connectionStatus,
+              connectionStatus === "Login successful" ? styles.connectionSuccess : styles.connectionError
+            ]}>
               <Text style={styles.connectionStatusText}>
                 {connectionStatus}
               </Text>
@@ -245,10 +236,6 @@ const Login = () => {
                 <Text style={styles.signUpLink}>Sign Up</Text>
               </Text>
             </Pressable>
-
-            <View style={styles.debugContainer}>
-              <Text style={styles.debugText}>Connected to: {API_BASE_URL}</Text>
-            </View>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -291,13 +278,17 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
   connectionStatus: {
-    backgroundColor: "#e3f2fd",
     padding: 10,
     borderRadius: 5,
     marginBottom: 10,
   },
+  connectionSuccess: {
+    backgroundColor: "#e8f5e9",
+  },
+  connectionError: {
+    backgroundColor: "#ffebee",
+  },
   connectionStatusText: {
-    color: "#1976d2",
     textAlign: "center",
     fontSize: 12,
   },
@@ -404,17 +395,6 @@ const styles = StyleSheet.create({
     color: "#007FFF",
     fontWeight: "500",
   },
-  debugContainer: {
-    marginTop: 20,
-    padding: 10,
-    backgroundColor: "#f0f0f0",
-    borderRadius: 5,
-  },
-  debugText: {
-    fontSize: 12,
-    color: "#666",
-  },
 });
 
 export default Login;
-

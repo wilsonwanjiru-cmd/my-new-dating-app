@@ -33,7 +33,7 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Phone number is required for M-Pesa'],
     validate: {
-      validator: v => /^\+?254[0-9]{9}$/.test(v), // Kenyan phone number format
+      validator: v => /^\+?254[0-9]{9}$/.test(v),
       message: props => `${props.value} is not a valid Kenyan phone number!`
     }
   },
@@ -54,11 +54,16 @@ const userSchema = new mongoose.Schema({
     maxlength: [500, 'Description cannot exceed 500 characters']
   },
   profileImages: [{
-    type: String,
-    validate: {
-      validator: v => validator.isURL(v, { protocols: ['http','https'], require_protocol: true }),
-      message: 'Invalid image URL'
-    }
+    url: {
+      type: String,
+      required: true,
+      validate: {
+        validator: v => validator.isURL(v, { protocols: ['http', 'https'], require_protocol: true }),
+        message: 'Invalid image URL'
+      }
+    },
+    publicId: { type: String, required: true },
+    uploadedAt: { type: Date, default: Date.now }
   }],
   location: {
     type: {
@@ -72,25 +77,19 @@ const userSchema = new mongoose.Schema({
       required: true,
       validate: {
         validator: function(v) {
-          return Array.isArray(v) && 
-                 v.length === 2 && 
-                 typeof v[0] === 'number' && 
-                 typeof v[1] === 'number' &&
-                 v[0] >= -180 && v[0] <= 180 && // Valid longitude
-                 v[1] >= -90 && v[1] <= 90;     // Valid latitude
+          return Array.isArray(v) &&
+            v.length === 2 &&
+            typeof v[0] === 'number' &&
+            typeof v[1] === 'number' &&
+            v[0] >= -180 && v[0] <= 180 &&
+            v[1] >= -90 && v[1] <= 90;
         },
-        message: props => `Invalid coordinates: ${props.value}. Must be [longitude, latitude] with valid values`
+        message: props => `Invalid coordinates: ${props.value}. Must be [longitude, latitude]`
       },
-      default: [36.8219, -1.2921] // Default to Nairobi coordinates
+      default: [36.8219, -1.2921]
     },
-    address: {
-      type: String,
-      trim: true
-    },
-    lastUpdated: {
-      type: Date,
-      default: Date.now
-    }
+    address: { type: String, trim: true },
+    lastUpdated: { type: Date, default: Date.now }
   },
   lastActive: {
     type: Date,
@@ -104,7 +103,7 @@ const userSchema = new mongoose.Schema({
     lastPayment: {
       amount: { 
         type: Number, 
-        default: 10, // KES 10 fixed amount
+        default: 10,
         validate: {
           validator: v => v === 10,
           message: 'Subscription amount must be KES 10'
@@ -114,7 +113,7 @@ const userSchema = new mongoose.Schema({
       mpesaCode: {
         type: String,
         validate: {
-          validator: v => /^[A-Z0-9]{10}$/.test(v), // MPesa transaction code format
+          validator: v => /^[A-Z0-9]{10}$/.test(v),
           message: 'Invalid M-Pesa transaction code'
         }
       },
@@ -163,7 +162,7 @@ const userSchema = new mongoose.Schema({
       min: { type: Number, default: 18, min: 18 },
       max: { type: Number, default: 100, max: 100 }
     },
-    distance: { // in kilometers
+    distance: {
       type: Number,
       default: 50,
       min: 1,
@@ -225,17 +224,14 @@ userSchema.index({ email: 1 }, { unique: true });
 userSchema.index({ location: '2dsphere' });
 userSchema.index({ lastActive: -1 });
 
-// Middleware to ensure valid location data - FIXED VERSION
+// Middleware to ensure valid location data
 userSchema.pre('save', function(next) {
   if (this.isModified('location') && this.location) {
-    // Ensure coordinates array exists and has exactly 2 numbers
     if (!Array.isArray(this.location.coordinates)) {
-      this.location.coordinates = [36.8219, -1.2921]; // Default to Nairobi
+      this.location.coordinates = [36.8219, -1.2921];
     } else if (this.location.coordinates.length !== 2) {
-      this.location.coordinates = [36.8219, -1.2921]; // Default to Nairobi
+      this.location.coordinates = [36.8219, -1.2921];
     }
-    
-    // Update lastUpdated timestamp
     this.location.lastUpdated = new Date();
   }
   next();
@@ -244,7 +240,6 @@ userSchema.pre('save', function(next) {
 // Password hashing middleware
 userSchema.pre('save', async function(next) {
   if (!this.isModified('password')) return next();
-  
   try {
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
@@ -276,7 +271,7 @@ userSchema.virtual('location.formatted').get(function() {
   return `Lat: ${this.location.coordinates[1]}, Long: ${this.location.coordinates[0]}`;
 });
 
-// Add M-Pesa specific method
+// M-Pesa method
 userSchema.methods.initiateMpesaPayment = async function() {
   return {
     phoneNumber: this.phoneNumber,
@@ -286,11 +281,10 @@ userSchema.methods.initiateMpesaPayment = async function() {
   };
 };
 
-// Update subscription method for M-Pesa
 userSchema.methods.activateSubscription = function(mpesaResponse) {
   this.subscription = {
     isActive: true,
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours from now
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     lastPayment: {
       amount: 10,
       date: new Date(),
@@ -298,8 +292,7 @@ userSchema.methods.activateSubscription = function(mpesaResponse) {
       phoneNumber: mpesaResponse.PhoneNumber
     }
   };
-  
-  // Add to payment history
+
   this.subscription.paymentHistory.push({
     amount: 10,
     date: new Date(),

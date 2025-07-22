@@ -10,7 +10,6 @@ const fs = require('fs');
 const morgan = require('morgan');
 const { Server } = require('socket.io');
 const { format } = require('date-fns');
-
 const app = express();
 const server = http.createServer(app);
 

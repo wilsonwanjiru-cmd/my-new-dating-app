@@ -1,209 +1,187 @@
-// frontend/app/_context/AuthContext.js
-
 import React, { createContext, useState, useEffect, useContext, useCallback } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Alert } from "react-native";
 import axios from "axios";
-import { API_BASE_URL } from "../_config";
+import { API_BASE_URL, API_ENDPOINTS, AUTH_CONFIG } from "../_config";
 
-// Create context with default values
-export const AuthContext = createContext({
-  user: null,
-  token: null,
-  isSubscribed: false,
-  subscriptionExpiresAt: null,
-  profiles: [],
-  loading: true,
-  login: () => {},
-  logout: () => {},
-  loadProfiles: () => {},
-  checkSubscription: () => false,
-  updateSubscription: () => {},
-  setUser: () => {},
-  setToken: () => {},
-  setIsSubscribed: () => {},
-  setSubscriptionExpiresAt: () => {}, // ✅ ADD THIS
-});
+// Constants for free tier limits
+const FREE_PHOTO_LIMIT = 7;
+const FREE_PHOTO_RESET_HOURS = 24;
+
+// Create context
+const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
-  const [token, setToken] = useState(null);
-  const [isSubscribed, setIsSubscribed] = useState(false);
-  const [subscriptionExpiresAt, setSubscriptionExpiresAt] = useState(null);
-  const [profiles, setProfiles] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [state, setState] = useState({
+    user: null,
+    token: null,
+    isLoading: true,
+    error: null,
+    freePhotosViewed: 0,
+    lastPhotoViewDate: null,
+    freePhotosLimit: FREE_PHOTO_LIMIT
+  });
 
-  // Load user data from AsyncStorage on app start
-  const loadUserFromStorage = useCallback(async () => {
-    try {
-      const [userData, authToken, subscribed, expiry] = await Promise.all([
-        AsyncStorage.getItem('user'),
-        AsyncStorage.getItem('token'),
-        AsyncStorage.getItem('isSubscribed'),
-        AsyncStorage.getItem('subscriptionExpiresAt')
-      ]);
-
-      if (userData && authToken) {
-        const parsedUser = JSON.parse(userData);
-        setUser(parsedUser);
-        setToken(authToken);
-
-        const isSubscribedValue = JSON.parse(subscribed) === true;
-        const subscriptionValid = expiry && new Date(expiry) > new Date();
-
-        setIsSubscribed(isSubscribedValue && subscriptionValid);
-        setSubscriptionExpiresAt(expiry);
-      }
-    } catch (error) {
-      console.error('Failed to load user data', error);
-      Alert.alert('Error', 'Failed to load user data');
-    } finally {
-      setLoading(false);
-    }
+  // Check if photo views should reset (24h passed)
+  const shouldResetPhotoViews = useCallback((lastDate) => {
+    if (!lastDate) return true;
+    const lastView = new Date(lastDate);
+    const now = new Date();
+    const hoursDiff = (now - lastView) / (1000 * 60 * 60);
+    return hoursDiff >= FREE_PHOTO_RESET_HOURS;
   }, []);
 
-  // Fetch profiles from API
-  const loadProfiles = useCallback(async () => {
+  // Initialize auth state
+  const initializeAuth = useCallback(async () => {
     try {
-      const currentToken = token || await AsyncStorage.getItem('token');
-      if (!currentToken) return [];
-
-      const response = await axios.get(`${API_BASE_URL}/api/profiles`, {
-        headers: { Authorization: `Bearer ${currentToken}` }
-      });
-
-      setProfiles(response.data.profiles || []);
-      return response.data.profiles || [];
-    } catch (error) {
-      console.error('Failed to load profiles', error);
-      Alert.alert('Error', 'Failed to load profiles');
-      return [];
-    }
-  }, [token]);
-
-  // Login function
-  const login = useCallback(async (userData, authToken, subscribed = false, expiry = null) => {
-    try {
-      await Promise.all([
-        AsyncStorage.setItem('user', JSON.stringify(userData)),
-        AsyncStorage.setItem('token', authToken),
-        AsyncStorage.setItem('isSubscribed', JSON.stringify(subscribed)),
-        AsyncStorage.setItem('subscriptionExpiresAt', expiry),
+      const [token, user, lastViewDate, viewedCount] = await Promise.all([
+        AsyncStorage.getItem(AUTH_CONFIG.TOKEN_KEY),
+        AsyncStorage.getItem(AUTH_CONFIG.PERSIST_USER_KEY),
+        AsyncStorage.getItem('lastPhotoViewDate'),
+        AsyncStorage.getItem('freePhotosViewed')
       ]);
 
-      setUser(userData);
-      setToken(authToken);
-      setIsSubscribed(subscribed);
-      setSubscriptionExpiresAt(expiry);
+      const shouldReset = shouldResetPhotoViews(lastViewDate);
+      const initialCount = shouldReset ? 0 : (parseInt(viewedCount) || 0);
 
-      await loadProfiles();
-      return true;
+      setState({
+        user: user ? JSON.parse(user) : null,
+        token,
+        isLoading: false,
+        error: null,
+        freePhotosViewed: initialCount,
+        lastPhotoViewDate: shouldReset ? null : lastViewDate,
+        freePhotosLimit: FREE_PHOTO_LIMIT
+      });
+
+      if (shouldReset) {
+        await AsyncStorage.multiSet([
+          ['freePhotosViewed', '0'],
+          ['lastPhotoViewDate', new Date().toISOString()]
+        ]);
+      }
     } catch (error) {
-      console.error('Login failed', error);
-      Alert.alert('Login Error', 'Failed to save login data');
-      return false;
+      console.error('Auth initialization error:', error);
+      setState(prev => ({ 
+        ...prev, 
+        isLoading: false, 
+        error: error.message 
+      }));
     }
-  }, [loadProfiles]);
+  }, [shouldResetPhotoViews]);
+
+  // Track photo view
+  const incrementPhotoView = useCallback(async () => {
+    const newCount = state.freePhotosViewed + 1;
+    setState(prev => ({
+      ...prev,
+      freePhotosViewed: newCount
+    }));
+    await AsyncStorage.setItem('freePhotosViewed', newCount.toString());
+  }, [state.freePhotosViewed]);
+
+  // Check if can view more photos
+  const canViewMorePhotos = useCallback(() => {
+    return state.freePhotosViewed < FREE_PHOTO_LIMIT;
+  }, [state.freePhotosViewed]);
+
+  // Login function
+  const login = useCallback(async (credentials) => {
+    try {
+      setState(prev => ({ ...prev, isLoading: true, error: null }));
+
+      const response = await axios.post(
+        `${API_BASE_URL}${API_ENDPOINTS.AUTH.LOGIN}`,
+        credentials,
+        {
+          timeout: 10000 // 10 second timeout
+        }
+      );
+
+      const { user, token } = response.data;
+
+      await Promise.all([
+        AsyncStorage.setItem(AUTH_CONFIG.PERSIST_USER_KEY, JSON.stringify(user)),
+        AsyncStorage.setItem(AUTH_CONFIG.TOKEN_KEY, token),
+        AsyncStorage.setItem('lastPhotoViewDate', new Date().toISOString()),
+        AsyncStorage.setItem('freePhotosViewed', '0')
+      ]);
+
+      setState({
+        user,
+        token,
+        isLoading: false,
+        error: null,
+        freePhotosViewed: 0,
+        lastPhotoViewDate: new Date().toISOString(),
+        freePhotosLimit: FREE_PHOTO_LIMIT
+      });
+
+      return { success: true, user };
+    } catch (error) {
+      let errorMessage = 'Login failed. Please try again.';
+      if (error.response) {
+        errorMessage = error.response.data?.message || errorMessage;
+      } else if (error.code === 'ECONNABORTED') {
+        errorMessage = 'Request timeout. Check your connection.';
+      }
+
+      setState(prev => ({
+        ...prev,
+        isLoading: false,
+        error: errorMessage,
+      }));
+      
+      return { success: false, error: errorMessage };
+    }
+  }, []);
 
   // Logout function
   const logout = useCallback(async () => {
     try {
       await Promise.all([
-        AsyncStorage.removeItem('user'),
-        AsyncStorage.removeItem('token'),
-        AsyncStorage.removeItem('isSubscribed'),
-        AsyncStorage.removeItem('subscriptionExpiresAt'),
+        AsyncStorage.removeItem(AUTH_CONFIG.PERSIST_USER_KEY),
+        AsyncStorage.removeItem(AUTH_CONFIG.TOKEN_KEY),
       ]);
 
-      setUser(null);
-      setToken(null);
-      setIsSubscribed(false);
-      setSubscriptionExpiresAt(null);
-      setProfiles([]);
-      return true;
+      setState({
+        user: null,
+        token: null,
+        isLoading: false,
+        error: null,
+        freePhotosViewed: 0,
+        lastPhotoViewDate: null,
+        freePhotosLimit: FREE_PHOTO_LIMIT
+      });
     } catch (error) {
       console.error('Logout error:', error);
-      Alert.alert('Logout Error', 'Failed to clear user data');
-      return false;
+      setState(prev => ({ ...prev, error: error.message }));
     }
   }, []);
 
-  // Check subscription status
-  const checkSubscription = useCallback(() => {
-    if (!subscriptionExpiresAt) return false;
-    return new Date(subscriptionExpiresAt) > new Date();
-  }, [subscriptionExpiresAt]);
-
-  // Update subscription
-  const updateSubscription = useCallback(async (expiryDate) => {
-    try {
-      const updatedUser = {
-        ...user,
-        subscription: {
-          ...user?.subscription,
-          isActive: true,
-          expiresAt: expiryDate
-        }
-      };
-
-      await Promise.all([
-        AsyncStorage.setItem('user', JSON.stringify(updatedUser)),
-        AsyncStorage.setItem('isSubscribed', 'true'),
-        AsyncStorage.setItem('subscriptionExpiresAt', expiryDate),
-      ]);
-
-      setUser(updatedUser);
-      setIsSubscribed(true);
-      setSubscriptionExpiresAt(expiryDate);
-      return true;
-    } catch (error) {
-      console.error('Subscription update failed', error);
-      Alert.alert('Subscription Error', 'Failed to update subscription');
-      return false;
-    }
-  }, [user]);
-
   // Initialize on mount
   useEffect(() => {
-    loadUserFromStorage();
-  }, [loadUserFromStorage]);
+    initializeAuth();
+  }, [initializeAuth]);
 
-  // Periodic subscription check
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (subscriptionExpiresAt && new Date(subscriptionExpiresAt) < new Date()) {
-        setIsSubscribed(false);
-      }
-    }, 60000); // check every 60 seconds
-
-    return () => clearInterval(interval);
-  }, [subscriptionExpiresAt]);
-
+  // Context value
   const value = {
-    user,
-    setUser,
-    token,
-    setToken,
-    isSubscribed,
-    setIsSubscribed,
-    subscriptionExpiresAt,
-    setSubscriptionExpiresAt, // ✅ FIXED: now exposed
-    profiles,
-    loading,
+    ...state,
     login,
     logout,
-    loadProfiles,
-    checkSubscription,
-    updateSubscription,
+    incrementPhotoView,
+    canViewMorePhotos,
+    getAuthToken: () => state.token,
+    getRemainingPhotoViews: () => FREE_PHOTO_LIMIT - state.freePhotosViewed
   };
 
   return (
     <AuthContext.Provider value={value}>
-      {!loading && children}
+      {children}
     </AuthContext.Provider>
   );
 };
 
+// Custom hook
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {
@@ -211,3 +189,6 @@ export const useAuth = () => {
   }
   return context;
 };
+
+// Default export for Expo Router
+export default AuthProvider;

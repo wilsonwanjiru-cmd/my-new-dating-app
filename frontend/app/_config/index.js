@@ -1,22 +1,25 @@
-// app/config.js
+
 // app/_config/index.js
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 
 // ==================== PRODUCTION CONFIGURATION ====================
-export const API_BASE_URL = 'https://dating-app-3eba.onrender.com';
+export const API_BASE_URL = 'https://dating-app-3eba.onrender.com'; // No trailing slash!
 export const API_TIMEOUT = 15000; // 15 seconds timeout
+export const MAX_API_RETRIES = 2; // Maximum retry attempts for failed requests
+export const API_RETRY_DELAY = 1000; // 1 second between retries
 
-// Enhanced API Endpoints with dynamic path support
+// Enhanced API Endpoints with absolute paths
 export const API_ENDPOINTS = {
   AUTH: {
-    LOGIN: '/api/auth/login',
+    LOGIN: '/api/auth/login', // Verified working endpoint
     REGISTER: '/api/auth/register',
     PROFILE: '/api/auth/profile',
     LOGOUT: '/api/auth/logout',
-    REFRESH: '/api/auth/refresh',
+    REFRESH: '/api/auth/refresh-token', // Changed to match your backend
     VERIFY_EMAIL: '/api/auth/verify-email',
-    RESET_PASSWORD: '/api/auth/reset-password'
+    RESET_PASSWORD: '/api/auth/reset-password',
+    HEALTH_CHECK: '/api/health' // Added health check endpoint
   },
   USERS: {
     BASE: '/api/users',
@@ -51,7 +54,8 @@ export const API_ENDPOINTS = {
   PAYMENTS: {
     INITIATE: '/api/payments/initiate',
     VERIFY: '/api/payments/verify',
-    HISTORY: '/api/payments/history'
+    HISTORY: '/api/payments/history',
+    SUBSCRIBE: '/api/payments/subscribe' // Added subscription endpoint
   },
   MEDIA: {
     UPLOAD: '/api/media/upload',
@@ -64,7 +68,8 @@ export const AUTH_CONFIG = {
   TOKEN_KEY: 'authToken',
   REFRESH_TOKEN_KEY: 'refreshToken',
   TOKEN_EXPIRY_BUFFER: 300000, // 5 minutes buffer
-  PERSIST_USER_KEY: 'currentUser'
+  PERSIST_USER_KEY: 'currentUser',
+  TOKEN_REFRESH_THRESHOLD: 60000 // 1 minute before token expires
 };
 
 // Improved headers with version and platform info
@@ -73,12 +78,20 @@ export const getHeaders = async (additionalHeaders = {}) => {
   return {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
-    'Authorization': `Bearer ${token || ''}`,
+    'Authorization': token ? `Bearer ${token}` : '',
     'X-App-Version': Constants.expoConfig?.version || '1.0.0',
     'X-Platform': Constants.platform?.os || 'mobile',
     'X-Device-Id': Constants.deviceId || 'unknown',
+    'X-Request-Source': 'mobile-app',
     ...additionalHeaders
   };
+};
+
+// Connection Monitoring Configuration
+export const CONNECTION_CONFIG = {
+  HEALTH_CHECK_INTERVAL: 30000, // 30 seconds
+  HEALTH_CHECK_TIMEOUT: 5000, // 5 seconds
+  OFFLINE_RETRY_INTERVAL: 10000 // 10 seconds
 };
 
 // Production Services Configuration
@@ -105,7 +118,8 @@ export const FEATURE_FLAGS = {
     ENABLED: true,
     REQUIRE_SUBSCRIPTION: true,
     MAX_FREE_PHOTOS: 7,
-    MAX_FREE_LIKES: 50
+    MAX_FREE_LIKES: 50,
+    FREE_TRIAL_DAYS: 0 // No free trial
   },
   VIDEO_CALL: {
     ENABLED: false,
@@ -115,7 +129,8 @@ export const FEATURE_FLAGS = {
   NOTIFICATIONS: {
     PUSH_ENABLED: true,
     EMAIL_ENABLED: true,
-    IN_APP_ENABLED: true
+    IN_APP_ENABLED: true,
+    MESSAGE_PREVIEW_FREE: false // Free users don't see message previews
   },
   OFFLINE_MODE: {
     ENABLED: false,
@@ -123,32 +138,64 @@ export const FEATURE_FLAGS = {
   }
 };
 
-// Subscription Configuration
+// Subscription Configuration (Updated for KES 10/24hrs model)
 export const SUBSCRIPTION = {
   PLANS: {
-    BASIC: {
-      PRICE: 10,
-      DURATION: 30, // days
-      FEATURES: ['unlimited_likes', 'view_all_photos']
+    BASIC_24HR: {
+      PRICE: 10, // KES 10
+      DURATION: 24, // hours
+      FEATURES: [
+        'unlimited_messaging',
+        'unlimited_photo_uploads',
+        'view_full_profiles',
+        'see_who_liked_you'
+      ],
+      PAYMENT_METHODS: ['mpesa']
     },
-    PREMIUM: {
-      PRICE: 25,
-      DURATION: 90, // days
-      FEATURES: ['video_calls', 'priority_matching', 'read_receipts']
+    PREMIUM_7DAY: {
+      PRICE: 50, // KES 50
+      DURATION: 168, // hours (7 days)
+      FEATURES: [
+        'priority_in_search',
+        'read_receipts',
+        'boosted_profile'
+      ],
+      PAYMENT_METHODS: ['mpesa', 'card']
     }
   },
-  PAYMENT_METHODS: ['mpesa', 'card', 'paypal']
+  DEFAULT_PLAN: 'BASIC_24HR'
 };
 
-// Debugging (will be tree-shaken in production)
+// Debugging configuration
+export const DEBUG_CONFIG = {
+  LOG_API_CALLS: __DEV__,
+  LOG_API_RESPONSES: __DEV__,
+  LOG_AUTH_FLOW: __DEV__,
+  MOCK_API_RESPONSES: false
+};
+
+// Configuration validation and logging
 if (__DEV__) {
-  console.log('[PROD] App Configuration Loaded');
-  console.log('[PROD] API Base:', API_BASE_URL);
-  console.log('[PROD] Environment:', Constants.expoConfig?.extra?.env || 'production');
+  console.log('[CONFIG] App Configuration Loaded');
+  console.log('[CONFIG] API Base:', API_BASE_URL);
+  console.log('[CONFIG] Environment:', Constants.expoConfig?.extra?.env || 'production');
+  
+  // Validate critical configuration
+  if (!API_BASE_URL) {
+    console.error('❌ Critical Error: API_BASE_URL is not configured');
+    throw new Error('API base URL is required');
+  }
+  
+  if (!API_ENDPOINTS.AUTH.LOGIN) {
+    console.error('❌ Critical Error: Login endpoint not configured');
+    throw new Error('Login endpoint is required');
+  }
 }
 
-// Configuration Validation
-if (!API_BASE_URL) {
-  console.error('❌ API_BASE_URL is not configured');
-  throw new Error('API base URL is required');
-}
+// Helper function to build full API URLs
+export const buildApiUrl = (endpoint) => {
+  if (endpoint.startsWith('http')) {
+    return endpoint; // Already a full URL
+  }
+  return `${API_BASE_URL}${endpoint}`;
+};

@@ -1,5 +1,5 @@
 // frontend/index.js
-// frontend/index.js
+// frontend/app/index.js
 import React, { useEffect, useState } from 'react';
 import { Redirect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -8,45 +8,39 @@ import axios from 'axios';
 import Constants from 'expo-constants';
 import { ActivityIndicator, View, StyleSheet } from 'react-native';
 
+import { AuthProvider } from './_context/AuthContext'; // ✅ Make sure this path is correct
+
 const API_BASE_URL = Constants.expoConfig?.extra?.apiBaseUrl || 'https://dating-app-3eba.onrender.com';
 
-// Configure axios defaults
+// Axios defaults
 axios.defaults.baseURL = API_BASE_URL;
-axios.defaults.timeout = 10000; // 10 second timeout
+axios.defaults.timeout = 10000;
 
-// Add response interceptor for handling 401 errors
 axios.interceptors.response.use(
   response => response,
   async error => {
     const originalRequest = error.config;
-    
-    // If 401 error and we haven't already retried
+
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
-      
+
       try {
-        // Attempt to refresh token
         const refreshToken = await AsyncStorage.getItem('refreshToken');
         if (!refreshToken) throw new Error('No refresh token available');
-        
+
         const response = await axios.post('/api/auth/refresh-token', { refreshToken });
         const newToken = response.data.token;
-        
-        // Store new tokens
+
         await AsyncStorage.setItem('auth', newToken);
         if (response.data.refreshToken) {
           await AsyncStorage.setItem('refreshToken', response.data.refreshToken);
         }
-        
-        // Update axios defaults with new token
+
         axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
         originalRequest.headers['Authorization'] = `Bearer ${newToken}`;
-        
-        // Retry the original request
+
         return axios(originalRequest);
       } catch (refreshError) {
-        console.error('Token refresh failed:', refreshError);
-        // Clear all auth data if refresh fails
         await Promise.all([
           AsyncStorage.removeItem('auth'),
           AsyncStorage.removeItem('refreshToken'),
@@ -55,12 +49,12 @@ axios.interceptors.response.use(
         throw refreshError;
       }
     }
-    
+
     return Promise.reject(error);
   }
 );
 
-const Index = () => {
+const AppInitializer = () => {
   const [redirectPath, setRedirectPath] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -70,66 +64,49 @@ const Index = () => {
         headers: { Authorization: `Bearer ${token}` }
       });
       return response.data.valid;
-    } catch (error) {
-      console.error('Token verification failed:', error);
+    } catch {
       return false;
     }
   };
 
   const fetchUserData = async (userId, token) => {
-    try {
-      const response = await axios.get(`/api/users/${userId}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Failed to fetch user data:', error);
-      throw error;
-    }
+    const response = await axios.get(`/api/users/${userId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
   };
 
   const initializeApp = async () => {
     try {
       const token = await AsyncStorage.getItem('auth');
-      
       if (!token) {
         setRedirectPath('/(authenticate)/login');
         return;
       }
 
-      // Verify token structure
       let decoded;
       try {
         decoded = jwtDecode(token);
-        if (!decoded.userId) {
-          throw new Error('Invalid token structure');
-        }
-      } catch (decodeError) {
-        console.error('Token decode error:', decodeError);
+        if (!decoded.userId) throw new Error('Invalid token');
+      } catch {
         throw new Error('Invalid token format');
       }
 
-      // Verify token with server
-      const isTokenValid = await verifyToken(token);
-      if (!isTokenValid) {
-        throw new Error('Invalid or expired token');
-      }
+      const isValid = await verifyToken(token);
+      if (!isValid) throw new Error('Token expired');
 
-      // Set axios auth header
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-
-      // Get user data
       const user = await fetchUserData(decoded.userId, token);
-      const updatedUser = { 
+
+      const updatedUser = {
         ...user,
-        isSubscribed: user.subscriptionExpiresAt 
+        isSubscribed: user.subscriptionExpiresAt
           ? new Date(user.subscriptionExpiresAt) > new Date()
           : false
       };
 
       await AsyncStorage.setItem('user', JSON.stringify(updatedUser));
-      
-      // Determine where to redirect based on user state
+
       if (!updatedUser.profileComplete) {
         setRedirectPath('/(tabs)/bio');
       } else {
@@ -137,29 +114,24 @@ const Index = () => {
       }
 
     } catch (error) {
-      console.error('Initialization error:', error);
-      
-      // Clear invalid auth data
       await Promise.all([
         AsyncStorage.removeItem('auth'),
         AsyncStorage.removeItem('refreshToken'),
         AsyncStorage.removeItem('user')
       ]);
 
-      // Handle specific error cases
       let errorPath = '/(authenticate)/login';
-      if (error.message.includes('Invalid token') || error.response?.status === 401) {
+
+      if (error.message.includes('Invalid token')) {
         errorPath += '?error=invalid_token';
-      } else if (error.response?.status === 400) {
-        errorPath += '?error=bad_request';
       } else if (error.response?.status === 404) {
         errorPath = '/(authenticate)/register';
-      } else if (error.message.includes('network') || error.message.includes('timeout')) {
+      } else if (error.message.includes('network')) {
         errorPath += '?error=network';
       } else {
         errorPath += '?error=unknown';
       }
-      
+
       setRedirectPath(errorPath);
     } finally {
       setLoading(false);
@@ -190,4 +162,10 @@ const styles = StyleSheet.create({
   }
 });
 
-export default Index;
+export default function Index() {
+  return (
+    <AuthProvider>
+      <AppInitializer />
+    </AuthProvider>
+  );
+}

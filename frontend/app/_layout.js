@@ -9,11 +9,11 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'react-native';
 import Toast from 'react-native-toast-message';
 
-// Create a query client for React Query
+// Create a production-optimized query client
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 1000 * 60 * 5, // 5 minutes cache time
+      staleTime: 1000 * 60 * 5, // 5 minutes cache
       retry: 2, // Retry failed queries twice
       refetchOnWindowFocus: false, // Disable refetch on window focus
     },
@@ -28,16 +28,17 @@ export default function RootLayout() {
           <QueryClientProvider client={queryClient}>
             <SocketProvider>
               <SubscriptionProvider>
+                {/* Status bar configuration */}
                 <StatusBar 
                   barStyle="dark-content"
                   backgroundColor="transparent"
                   translucent
                 />
                 
-                {/* Main app content */}
+                {/* Main app content slot */}
                 <Slot />
 
-                {/* Toast notifications */}
+                {/* Simplified Toast configuration */}
                 <Toast />
               </SubscriptionProvider>
             </SocketProvider>

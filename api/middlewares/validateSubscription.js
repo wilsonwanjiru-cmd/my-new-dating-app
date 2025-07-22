@@ -1,6 +1,8 @@
+
 // middlewares/validateSubscription.js
 const jwt = require("jsonwebtoken");
 const User = require('../models/user');
+const Photo = require('../models/photo'); // Assuming you have a Photo model
 
 const validateSubscription = async (req, res, next) => {
   try {
@@ -20,9 +22,17 @@ const validateSubscription = async (req, res, next) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Check if the subscription is active and not expired
+    // Count how many photos the user has uploaded
+    const photoCount = await Photo.countDocuments({ userId });
+
+    // If the user is not subscribed
     if (!user.subscriptionActive || new Date() > user.subscriptionExpiresAt) {
-      return res.status(403).json({ message: 'Subscription expired or not active. Please pay to access.' });
+      // Allow up to 7 photos only
+      if (photoCount >= 7) {
+        return res.status(403).json({
+          message: "Free upload limit reached. Please subscribe to upload more photos.",
+        });
+      }
     }
 
     // Attach the user object to the request for further use
