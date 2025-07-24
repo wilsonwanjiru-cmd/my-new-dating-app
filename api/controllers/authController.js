@@ -1,16 +1,12 @@
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
-const bcrypt = require("bcrypt");
 const User = require("../models/user");
 const { initiateSTKPush } = require("../utils/mpesaUtils");
 const { logError } = require("../utils/errorLogger");
 
-// Configuration
 const isDev = process.env.NODE_ENV === "development";
-
 const JWT_SECRET = process.env.JWT_SECRET || (isDev ? crypto.randomBytes(64).toString("hex") : "");
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || (isDev ? crypto.randomBytes(64).toString("hex") : "");
-const SALT_ROUNDS = parseInt(process.env.SALT_ROUNDS) || 12;
 const TOKEN_EXPIRY = process.env.TOKEN_EXPIRY || "1h";
 const REFRESH_TOKEN_EXPIRY = process.env.REFRESH_TOKEN_EXPIRY || "7d";
 const SUBSCRIPTION_AMOUNT = 10;
@@ -18,11 +14,10 @@ const SUBSCRIPTION_DURATION = 24 * 60 * 60 * 1000;
 const ACCOUNT_LOCK_DURATION = 15 * 60 * 1000;
 const MAX_FAILED_ATTEMPTS = 5;
 
-// Sanitize user
+// ✅ Cleaned sanitizeUser utility
 const sanitizeUser = (user) => {
   const u = user.toObject ? user.toObject() : user;
   delete u.password;
-  delete u.verificationTokens;
   delete u.__v;
   delete u.resetToken;
   delete u.resetTokenExpiry;
@@ -33,7 +28,6 @@ const sanitizeUser = (user) => {
   return u;
 };
 
-// Error handler
 const errorResponse = (res, status, code, message, error = null) => {
   const response = { success: false, code, message };
   if (error && isDev) {
@@ -44,7 +38,6 @@ const errorResponse = (res, status, code, message, error = null) => {
   return res.status(status).json(response);
 };
 
-// Token generator
 const generateTokens = (user) => {
   const isSubscribed = user.subscription?.isActive &&
     new Date(user.subscription.expiresAt) > new Date();
@@ -68,7 +61,7 @@ const generateTokens = (user) => {
   return { token, refreshToken };
 };
 
-// Register
+// ✅ Register
 exports.register = async (req, res) => {
   try {
     const { name, email, password, phoneNumber } = req.body;
@@ -87,15 +80,14 @@ exports.register = async (req, res) => {
       return errorResponse(res, 409, `${field.toUpperCase()}_EXISTS`, `${field} already registered`);
     }
 
-    const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
     const user = await User.create({
       name,
       email,
-      password: hashedPassword,
+      password,
       phoneNumber,
       location: {
         type: "Point",
-        coordinates: [36.8219, -1.2921] // Default Nairobi
+        coordinates: [36.8219, -1.2921] // Nairobi default
       }
     });
 
@@ -116,7 +108,7 @@ exports.register = async (req, res) => {
   }
 };
 
-// Login
+// ✅ Login
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -130,12 +122,12 @@ exports.login = async (req, res) => {
 
     if (user.accountLocked && user.lockUntil > new Date()) {
       const timeLeft = Math.ceil((user.lockUntil - new Date()) / 60000);
-      return errorResponse(res, 403, "ACCOUNT_LOCKED", `Account locked. Try again in ${timeLeft} minutes`);
+      return errorResponse(res, 403, "ACCOUNT_LOCKED", `Account locked. Try again in ${timeLeft} minute(s)`);
     }
 
-    const isMatch = await bcrypt.compare(password, user.password);
+    const isMatch = await user.comparePassword(password);
     if (!isMatch) {
-      user.failedLoginAttempts += 1;
+      user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
 
       if (user.failedLoginAttempts >= MAX_FAILED_ATTEMPTS) {
         user.accountLocked = true;
@@ -205,7 +197,7 @@ exports.refreshToken = async (req, res) => {
   }
 };
 
-// Verify Token
+// ✅ Verify Token (Cleaned)
 exports.verifyToken = async (req, res) => {
   try {
     const token = req.headers.authorization?.split(" ")[1];
@@ -232,7 +224,7 @@ exports.verifyToken = async (req, res) => {
   }
 };
 
-// Authenticate middleware
+// ✅ Middleware
 exports.authenticate = async (req, res, next) => {
   try {
     const token = req.headers.authorization?.split(" ")[1];
@@ -250,7 +242,7 @@ exports.authenticate = async (req, res, next) => {
   }
 };
 
-// Logout
+// ✅ Logout
 exports.logout = async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
@@ -265,7 +257,7 @@ exports.logout = async (req, res) => {
   }
 };
 
-// Subscription and M-Pesa handlers (unchanged)
-exports.initiateSubscription = async (req, res) => { /* ... */ };
-exports.handlePaymentCallback = async (req, res) => { /* ... */ };
-exports.getCurrentUser = async (req, res) => { /* ... */ };
+// ✅ Other features
+exports.initiateSubscription = async (req, res) => { /* no change */ };
+exports.handlePaymentCallback = async (req, res) => { /* no change */ };
+exports.getCurrentUser = async (req, res) => { /* no change */ };

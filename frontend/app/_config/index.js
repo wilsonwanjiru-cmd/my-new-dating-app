@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 
 // ==================== PRODUCTION CONFIGURATION ====================
-export const API_BASE_URL = 'https://dating-app-3eba.onrender.com'; // No trailing slash!
+export const API_BASE_URL = 'https://dating-apps.onrender.com'; // No trailing slash!
 export const API_TIMEOUT = 15000; // 15 seconds timeout
 export const MAX_API_RETRIES = 2; // Maximum retry attempts for failed requests
 export const API_RETRY_DELAY = 1000; // 1 second between retries

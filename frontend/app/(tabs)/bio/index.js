@@ -6,18 +6,19 @@ import {
   ScrollView,
   Image,
   Pressable,
-  FlatList,
   Alert,
   ActivityIndicator,
   TouchableOpacity,
-  Modal
+  Modal,
+  TextInput
 } from "react-native";
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Entypo, AntDesign } from "@expo/vector-icons";
 import * as ImagePicker from 'expo-image-picker';
 import Carousel from "react-native-reanimated-carousel";
 import { useAuth } from "../../_context/AuthContext";
 import { useRouter } from "expo-router";
+import apiClient from "../../_api/client";
 
 const BioScreen = () => {
   const router = useRouter();
@@ -33,7 +34,7 @@ const BioScreen = () => {
   } = useAuth();
   
   const [option, setOption] = useState("Photos");
-  const [description, setDescription] = useState("");
+  const [description, setDescription] = useState(user?.description || "");
   const [activeSlide, setActiveSlide] = useState(0);
   const [selectedTurnOns, setSelectedTurnOns] = useState(user?.turnOns || []);
   const [lookingOptions, setLookingOptions] = useState(user?.lookingFor || []);
@@ -42,6 +43,16 @@ const BioScreen = () => {
   const [updatingGender, setUpdatingGender] = useState(false);
   const [updatingDescription, setUpdatingDescription] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
+  // Initialize state from user data
+  useEffect(() => {
+    if (user) {
+      setDescription(user.description || "");
+      setSelectedGender(user.gender || "");
+      setSelectedTurnOns(user.turnOns || []);
+      setLookingOptions(user.lookingFor || []);
+    }
+  }, [user]);
 
   // Constants
   const MAX_FREE_PHOTOS = 7;
@@ -66,27 +77,36 @@ const BioScreen = () => {
     (!subscriptionExpiresAt || new Date(subscriptionExpiresAt) > new Date());
 
   // Determine visible photos based on subscription status
-  const getVisiblePhotos = (profile) => {
-    if (isSubscriptionActive) {
-      return profile?.profileImages || [];
-    }
-    return (profile?.profileImages || []).slice(0, MAX_FREE_PHOTOS);
+  const getVisiblePhotos = () => {
+    if (!user?.profileImages) return [];
+    if (isSubscriptionActive) return user.profileImages;
+    return user.profileImages.slice(0, MAX_FREE_PHOTOS);
   };
 
   // Handle photo viewing
-  const handleViewPhoto = (index) => {
-    if (index >= freePhotosViewed && !isSubscriptionActive) {
-      if (canViewMorePhotos()) {
-        incrementPhotoView();
-      } else {
-        Alert.alert(
-          "Limit Reached",
-          `You've viewed ${freePhotosLimit} photos today. Subscribe to view more.`,
-          [
-            { text: "Later" },
-            { text: "Subscribe", onPress: () => router.push("/subscribe") }
-          ]
-        );
+  const handleViewPhoto = async (index) => {
+    if (isSubscriptionActive) return;
+
+    if (index >= freePhotosViewed) {
+      try {
+        if (canViewMorePhotos && typeof canViewMorePhotos === 'function' && !canViewMorePhotos()) {
+          Alert.alert(
+            "Limit Reached",
+            `You've viewed ${freePhotosLimit} photos today. Subscribe to view more.`,
+            [
+              { text: "Later" },
+              { text: "Subscribe", onPress: () => router.push("/subscribe") }
+            ]
+          );
+          return;
+        }
+
+        if (incrementPhotoView && typeof incrementPhotoView === 'function') {
+          await incrementPhotoView();
+        }
+      } catch (error) {
+        console.error("Error handling photo view:", error);
+        Alert.alert("Error", "Failed to track photo view");
       }
     }
   };
@@ -100,10 +120,15 @@ const BioScreen = () => {
 
     try {
       setUpdatingDescription(true);
-      await updateUser({ description });
-      Alert.alert("Success", "Description updated successfully");
+      if (updateUser && typeof updateUser === 'function') {
+        await updateUser({ description });
+        Alert.alert("Success", "Description updated successfully");
+      } else {
+        throw new Error("Update function not available");
+      }
     } catch (error) {
-      Alert.alert("Error", "Failed to update description");
+      console.error("Update error:", error);
+      Alert.alert("Error", error.message || "Failed to update description");
     } finally {
       setUpdatingDescription(false);
     }
@@ -113,11 +138,16 @@ const BioScreen = () => {
   const handleGenderUpdate = async () => {
     try {
       setUpdatingGender(true);
-      await updateUser({ gender: selectedGender });
-      setShowGenderModal(false);
-      Alert.alert("Success", "Gender updated successfully");
+      if (updateUser && typeof updateUser === 'function') {
+        await updateUser({ gender: selectedGender });
+        setShowGenderModal(false);
+        Alert.alert("Success", "Gender updated successfully");
+      } else {
+        throw new Error("Update function not available");
+      }
     } catch (error) {
-      Alert.alert("Error", "Failed to update gender");
+      console.error("Update error:", error);
+      Alert.alert("Error", error.message || "Failed to update gender");
     } finally {
       setUpdatingGender(false);
     }
@@ -125,7 +155,6 @@ const BioScreen = () => {
 
   // Handle photo upload
   const handlePhotoUpload = async () => {
-    // Check photo limit for free users
     if (!isSubscriptionActive && user?.profileImages?.length >= MAX_FREE_PHOTOS) {
       Alert.alert(
         "Upload Limit Reached",
@@ -141,14 +170,12 @@ const BioScreen = () => {
     try {
       setUploadingPhoto(true);
       
-      // Request camera roll permissions
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert("Permission required", "We need access to your photos to upload images");
         return;
       }
 
-      // Launch image picker
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
@@ -156,50 +183,86 @@ const BioScreen = () => {
         quality: 0.8,
       });
 
-      if (!result.canceled) {
-        // This would call your API to upload the image
-        // For now, we'll just update local state with the URI
-        const newImageUri = result.assets[0].uri;
-        const updatedImages = [...(user?.profileImages || []), newImageUri];
-        await updateUser({ profileImages: updatedImages });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const imageUri = result.assets[0].uri;
+        
+        const formData = new FormData();
+        formData.append('photo', {
+          uri: imageUri,
+          type: 'image/jpeg',
+          name: 'profile-photo.jpg'
+        });
+
+        const response = await apiClient.post('/api/photos/upload', formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+          transformRequest: (data) => data,
+        });
+
+        if (updateUser && typeof updateUser === 'function') {
+          await updateUser({ 
+            profileImages: [...(user?.profileImages || []), response.data.imageUrl] 
+          });
+        }
+        
         Alert.alert("Success", "Photo uploaded successfully");
       }
     } catch (error) {
       console.error("Upload error:", error);
-      Alert.alert("Error", "Failed to upload photo");
+      let errorMessage = "Failed to upload photo";
+      
+      if (error.response) {
+        errorMessage = error.response.data?.message || 
+                      `Server responded with ${error.response.status}`;
+      } else if (error.request) {
+        errorMessage = "No response from server. Please check your connection.";
+      } else {
+        errorMessage = error.message || "Network request failed";
+      }
+      
+      Alert.alert("Upload Failed", errorMessage);
     } finally {
       setUploadingPhoto(false);
     }
   };
 
   // Render carousel item with view limits
-  const renderImageCarousel = ({ item, index }) => (
-    <TouchableOpacity 
-      onPress={() => handleViewPhoto(index)}
-      activeOpacity={0.8}
-    >
-      <View style={styles.carouselItem}>
-        <Image
-          style={styles.carouselImage}
-          source={{ uri: item }}
-        />
-        {/* Show overlay if photo is locked for free users */}
-        {!isSubscriptionActive && index >= MAX_FREE_PHOTOS && (
-          <View style={styles.lockedOverlay}>
-            <Text style={styles.lockedText}>Subscribe to view</Text>
-          </View>
-        )}
-        {/* Show view count for free users */}
-        {!isSubscriptionActive && index < MAX_FREE_PHOTOS && index >= freePhotosViewed && (
-          <View style={styles.viewCountOverlay}>
-            <Text style={styles.viewCountText}>
-              {freePhotosViewed}/{freePhotosLimit} views used
-            </Text>
-          </View>
-        )}
-      </View>
-    </TouchableOpacity>
-  );
+  const renderImageCarousel = ({ item, index }) => {
+    const imageUrl = typeof item === 'string' ? item : item.url;
+    return (
+      <TouchableOpacity 
+        onPress={() => handleViewPhoto(index)}
+        activeOpacity={0.8}
+      >
+        <View style={styles.carouselItem}>
+          <Image
+            style={styles.carouselImage}
+            source={{ uri: imageUrl }}
+          />
+          {!isSubscriptionActive && index >= MAX_FREE_PHOTOS && (
+            <View style={styles.lockedOverlay}>
+              <Text style={styles.lockedText}>Subscribe to view</Text>
+            </View>
+          )}
+          {!isSubscriptionActive && index < MAX_FREE_PHOTOS && index >= freePhotosViewed && (
+            <View style={styles.viewCountOverlay}>
+              <Text style={styles.viewCountText}>
+                {freePhotosViewed}/{freePhotosLimit} views used
+              </Text>
+            </View>
+          )}
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  // Format gender display text
+  const formatGenderText = (gender) => {
+    return gender.split('-').map(word => 
+      word.charAt(0).toUpperCase() + word.slice(1)
+    ).join('-');
+  };
 
   return (
     <ScrollView style={styles.container}>
@@ -212,13 +275,17 @@ const BioScreen = () => {
         <View style={styles.profileBadge}>
           <Image
             style={styles.profileImage}
-            source={{ uri: user?.profileImages?.[0] || "https://via.placeholder.com/100" }}
+            source={{ 
+              uri: user?.profileImages?.[0]?.url || 
+                   user?.profileImages?.[0] || 
+                   "https://via.placeholder.com/100" 
+            }}
           />
           <Text style={styles.profileName}>{user?.name || "User"}</Text>
           <Text style={styles.profileAge}>{user?.age || ''} years</Text>
           <TouchableOpacity onPress={() => setShowGenderModal(true)}>
             <Text style={styles.genderText}>
-              {user?.gender || 'Set gender'}
+              {user?.gender ? formatGenderText(user.gender) : 'Set gender'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -254,12 +321,12 @@ const BioScreen = () => {
           <View style={styles.descriptionInputContainer}>
             <TextInput
               value={description}
-              multiline
               onChangeText={setDescription}
               style={styles.descriptionInput}
               placeholder="Tell others about yourself..."
               placeholderTextColor="#888"
-              defaultValue={user?.description}
+              multiline
+              numberOfLines={4}
             />
             <Pressable
               onPress={updateUserDescription}
@@ -285,21 +352,19 @@ const BioScreen = () => {
           {user?.profileImages?.length > 0 ? (
             <>
               <Carousel
-                data={getVisiblePhotos(user)}
+                data={getVisiblePhotos()}
                 renderItem={renderImageCarousel}
                 sliderWidth={350}
                 itemWidth={300}
                 onSnapToItem={setActiveSlide}
               />
               
-              {/* Show remaining views for free users */}
               {!isSubscriptionActive && (
                 <Text style={styles.photoCounter}>
                   {Math.min(freePhotosViewed, freePhotosLimit)}/{freePhotosLimit} photos viewed today
                 </Text>
               )}
               
-              {/* Show subscription prompt if user has more photos */}
               {!isSubscriptionActive && user?.profileImages?.length > MAX_FREE_PHOTOS && (
                 <Text style={styles.subscribePrompt}>
                   Subscribe to view all {user.profileImages.length} photos
@@ -314,7 +379,6 @@ const BioScreen = () => {
           <View style={styles.uploadContainer}>
             <Text style={styles.uploadTitle}>Add new photos</Text>
             
-            {/* Show remaining upload slots for free users */}
             {!isSubscriptionActive && (
               <Text style={styles.remainingPhotosText}>
                 {MAX_FREE_PHOTOS - (user?.profileImages?.length || 0)} of {MAX_FREE_PHOTOS} free uploads remaining
@@ -369,7 +433,7 @@ const BioScreen = () => {
                   styles.genderOptionText,
                   selectedGender === gender && styles.selectedGenderOptionText
                 ]}>
-                  {gender.charAt(0).toUpperCase() + gender.slice(1)}
+                  {formatGenderText(gender)}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -379,7 +443,7 @@ const BioScreen = () => {
                 style={styles.cancelButton}
                 onPress={() => setShowGenderModal(false)}
               >
-                <Text style={styles.buttonText}>Cancel</Text>
+                <Text style={[styles.buttonText, { color: '#000' }]}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity 
                 style={styles.saveButton}

@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 const validator = require('validator');
-const bcrypt = require('bcrypt'); 
+const bcrypt = require('bcrypt');
 const { formatDistanceToNow } = require('date-fns');
 
 const userSchema = new mongoose.Schema({
@@ -96,13 +96,13 @@ const userSchema = new mongoose.Schema({
     default: Date.now
   },
 
-  // Subscription Info - M-Pesa Only
+  // Subscription Info
   subscription: {
     isActive: { type: Boolean, default: false },
     expiresAt: { type: Date, default: null },
     lastPayment: {
-      amount: { 
-        type: Number, 
+      amount: {
+        type: Number,
         default: 10,
         validate: {
           validator: v => v === 10,
@@ -140,18 +140,9 @@ const userSchema = new mongoose.Schema({
   },
 
   // Social Features
-  likesReceived: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  }],
-  matches: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  }],
-  crushes: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  }],
+  likesReceived: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  matches: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  crushes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   preferences: {
     gender: {
       type: String,
@@ -176,34 +167,24 @@ const userSchema = new mongoose.Schema({
       type: String,
       enum: ['new_like', 'new_match', 'new_message', 'subscription_expiry']
     },
-    from: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
-    },
+    from: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     message: String,
-    read: {
-      type: Boolean,
-      default: false
-    },
-    requiresSubscription: {
-      type: Boolean,
-      default: false
-    },
-    createdAt: {
-      type: Date,
-      default: Date.now
-    }
+    read: { type: Boolean, default: false },
+    requiresSubscription: { type: Boolean, default: false },
+    createdAt: { type: Date, default: Date.now }
   }],
 
-  // Account Verification
-  isVerified: {
-    type: Boolean,
-    default: false
-  },
+  // Account Verification & Security
+  isVerified: { type: Boolean, default: false },
   verificationToken: String,
   verificationTokenExpires: Date,
   resetToken: String,
-  resetTokenExpires: Date
+  resetTokenExpires: Date,
+  failedLoginAttempts: { type: Number, default: 0 },
+  accountLocked: { type: Boolean, default: false },
+  lockUntil: { type: Date },
+  lastLogin: { type: Date },
+  refreshToken: { type: String }
 
 }, {
   timestamps: true,
@@ -224,12 +205,10 @@ userSchema.index({ email: 1 }, { unique: true });
 userSchema.index({ location: '2dsphere' });
 userSchema.index({ lastActive: -1 });
 
-// Middleware to ensure valid location data
+// Pre-save: Handle location
 userSchema.pre('save', function(next) {
   if (this.isModified('location') && this.location) {
-    if (!Array.isArray(this.location.coordinates)) {
-      this.location.coordinates = [36.8219, -1.2921];
-    } else if (this.location.coordinates.length !== 2) {
+    if (!Array.isArray(this.location.coordinates) || this.location.coordinates.length !== 2) {
       this.location.coordinates = [36.8219, -1.2921];
     }
     this.location.lastUpdated = new Date();
@@ -237,7 +216,7 @@ userSchema.pre('save', function(next) {
   next();
 });
 
-// Password hashing middleware
+// Pre-save: Hash password only if modified
 userSchema.pre('save', async function(next) {
   if (!this.isModified('password')) return next();
   try {
@@ -249,29 +228,29 @@ userSchema.pre('save', async function(next) {
   }
 });
 
-// Method to compare passwords
+// Compare passwords
 userSchema.methods.comparePassword = async function(candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
 
-// Virtual for subscription status
+// Subscription status virtual
 userSchema.virtual('subscriptionStatus').get(function() {
   return {
     isActive: this.subscription?.isActive && new Date(this.subscription.expiresAt) > new Date(),
     expiresAt: this.subscription?.expiresAt,
-    timeRemaining: this.subscription?.expiresAt 
+    timeRemaining: this.subscription?.expiresAt
       ? formatDistanceToNow(new Date(this.subscription.expiresAt))
       : null
   };
 });
 
-// Virtual for formatted location
+// Location formatted virtual
 userSchema.virtual('location.formatted').get(function() {
   if (!this.location || !this.location.coordinates) return 'Location not set';
   return `Lat: ${this.location.coordinates[1]}, Long: ${this.location.coordinates[0]}`;
 });
 
-// M-Pesa method
+// M-Pesa payment method
 userSchema.methods.initiateMpesaPayment = async function() {
   return {
     phoneNumber: this.phoneNumber,
@@ -281,6 +260,7 @@ userSchema.methods.initiateMpesaPayment = async function() {
   };
 };
 
+// Activate subscription
 userSchema.methods.activateSubscription = function(mpesaResponse) {
   this.subscription = {
     isActive: true,
@@ -290,16 +270,17 @@ userSchema.methods.activateSubscription = function(mpesaResponse) {
       date: new Date(),
       mpesaCode: mpesaResponse.TransactionID,
       phoneNumber: mpesaResponse.PhoneNumber
-    }
+    },
+    paymentHistory: [
+      ...(this.subscription?.paymentHistory || []),
+      {
+        amount: 10,
+        date: new Date(),
+        mpesaCode: mpesaResponse.TransactionID,
+        phoneNumber: mpesaResponse.PhoneNumber
+      }
+    ]
   };
-
-  this.subscription.paymentHistory.push({
-    amount: 10,
-    date: new Date(),
-    mpesaCode: mpesaResponse.TransactionID,
-    phoneNumber: mpesaResponse.PhoneNumber
-  });
-
   return this.save();
 };
 

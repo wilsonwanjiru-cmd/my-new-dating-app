@@ -5,7 +5,7 @@ const {
   login,
   refreshToken,
   logout,
-  verifyToken,
+  verifyToken, // optional: kept but marked as deprecated
   authenticate,
   initiateSubscription,
   handlePaymentCallback,
@@ -21,7 +21,7 @@ const {
 // Rate limiting configuration
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20, // Limit each IP to 20 requests per windowMs
+  max: 20,
   message: {
     success: false,
     code: 'RATE_LIMITED',
@@ -81,7 +81,9 @@ const validateRefreshToken = [
     .withMessage('Invalid refresh token format')
 ];
 
-// Authentication Routes
+// Routes
+
+// Registration
 router.post(
   '/register',
   authLimiter,
@@ -90,6 +92,7 @@ router.post(
   register
 );
 
+// Login
 router.post(
   '/login',
   authLimiter,
@@ -98,6 +101,7 @@ router.post(
   login
 );
 
+// Refresh token
 router.post(
   '/refresh-token',
   sensitiveLimiter,
@@ -106,17 +110,22 @@ router.post(
   refreshToken
 );
 
+// Logout
 router.post(
   '/logout',
   authenticate,
   logout
 );
 
-router.get(
-  '/verify-token',
-  verifyToken
-);
+// 🛑 Deprecated — Email Verification
+router.get('/verify-token', (req, res) => {
+  return res.status(410).json({
+    success: false,
+    message: 'This endpoint is no longer supported. Email verification is not required.'
+  });
+});
 
+// Subscribe with Mpesa
 router.post(
   '/subscribe',
   sensitiveLimiter,
@@ -124,11 +133,13 @@ router.post(
   initiateSubscription
 );
 
+// Mpesa STK Callback
 router.post(
   '/mpesa-callback',
   handlePaymentCallback
 );
 
+// Get current user
 router.get(
   '/me',
   authenticate,

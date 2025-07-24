@@ -1,21 +1,40 @@
 // frontend/app/_api/client.js
 // frontend/app/_api/client.js
 import axios from 'axios';
-import { API_BASE_URL, API_TIMEOUT, AUTH_CONFIG } from '../_config';
-import { getHeaders } from '../_config';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Create axios instance with default config
+// Configuration
+const API_BASE_URL = 'https://dating-app-3eba.onrender.com';
+const API_TIMEOUT = 15000;
+const AUTH_CONFIG = {
+  TOKEN_KEY: 'authToken',
+  REFRESH_TOKEN_KEY: 'refreshToken',
+  PERSIST_USER_KEY: 'persist:user'
+};
+
+// Create axios instance
 const client = axios.create({
   baseURL: API_BASE_URL,
   timeout: API_TIMEOUT,
+  headers: {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json'
+  }
 });
+
+// Helper function to get common headers
+const getHeaders = async () => {
+  return {
+    'X-Device-Id': await AsyncStorage.getItem('deviceId') || 'mobile-app',
+    'X-App-Version': '1.0.0'
+  };
+};
 
 // Request queue for token refresh
 let isRefreshing = false;
 let failedQueue = [];
 const MAX_RETRIES = 2;
-const RETRY_DELAY = 1000; // 1 second
+const RETRY_DELAY = 1000;
 
 const processQueue = (error, token = null) => {
   failedQueue.forEach(prom => {
@@ -28,29 +47,23 @@ const processQueue = (error, token = null) => {
   failedQueue = [];
 };
 
-// Enhanced request interceptor
+// Request interceptor
 client.interceptors.request.use(
   async config => {
-    // Skip modification for auth endpoints
     if (config.url.includes('/auth/')) {
       return config;
     }
 
     try {
-      // Get token from AsyncStorage directly for better reliability
       const token = await AsyncStorage.getItem(AUTH_CONFIG.TOKEN_KEY);
-      
       if (token) {
         config.headers = {
           ...config.headers,
-          Authorization: `Bearer ${token}`,
-          ...await getHeaders(),
+          'Authorization': `Bearer ${token}`,
+          ...await getHeaders()
         };
       }
-
-      // Add request ID for tracking
       config.headers['X-Request-ID'] = Math.random().toString(36).substring(7);
-      
       return config;
     } catch (error) {
       console.error('Request interceptor error:', error);
@@ -60,18 +73,20 @@ client.interceptors.request.use(
   error => Promise.reject(error)
 );
 
-// Enhanced response interceptor with retry logic
+// Response interceptor
 client.interceptors.response.use(
   response => response,
   async error => {
     const originalRequest = error.config;
     
-    // If we don't have a response or the request has no config, reject
     if (!error.response || !originalRequest) {
-      return Promise.reject(error);
+      return Promise.reject({
+        ...error,
+        message: error.message || 'Network error occurred'
+      });
     }
 
-    // Handle network errors differently
+    // Network error handling
     if (error.code === 'ECONNABORTED' || error.message === 'Network Error') {
       if (!originalRequest._retryCount) {
         originalRequest._retryCount = 1;
@@ -85,14 +100,12 @@ client.interceptors.response.use(
       });
     }
 
-    // Handle 401 (Unauthorized) errors
+    // 401 Unauthorized handling
     if (error.response.status === 401 && !originalRequest._retry) {
-      // Skip refresh for auth endpoints
       if (originalRequest.url.includes('/auth/')) {
         return Promise.reject(error);
       }
 
-      // If already refreshing, add to queue
       if (isRefreshing) {
         return new Promise((resolve, reject) => {
           failedQueue.push({ resolve, reject });
@@ -113,34 +126,25 @@ client.interceptors.response.use(
           throw new Error('No refresh token available');
         }
 
-        // Refresh token request
         const response = await axios.post(`${API_BASE_URL}/auth/refresh-token`, {
           refreshToken
         }, {
           headers: await getHeaders(),
-          skipAuthRefresh: true // Custom flag to prevent infinite loops
+          skipAuthRefresh: true
         });
 
         const { token: newToken, refreshToken: newRefreshToken } = response.data;
 
-        // Store new tokens
         await Promise.all([
           AsyncStorage.setItem(AUTH_CONFIG.TOKEN_KEY, newToken),
           AsyncStorage.setItem(AUTH_CONFIG.REFRESH_TOKEN_KEY, newRefreshToken)
         ]);
 
-        // Update the original request
         originalRequest.headers.Authorization = `Bearer ${newToken}`;
-        
-        // Process queued requests
         processQueue(null, newToken);
-        
-        // Retry the original request
         return client(originalRequest);
       } catch (refreshError) {
         processQueue(refreshError);
-        
-        // If refresh failed with 401, clear auth data
         if (refreshError.response?.status === 401) {
           await Promise.all([
             AsyncStorage.removeItem(AUTH_CONFIG.TOKEN_KEY),
@@ -148,58 +152,59 @@ client.interceptors.response.use(
             AsyncStorage.removeItem(AUTH_CONFIG.PERSIST_USER_KEY)
           ]);
         }
-        
         return Promise.reject(refreshError);
       } finally {
         isRefreshing = false;
       }
     }
 
-    // Handle other error statuses
+    // Error message handling
+    let errorMessage = error.response.data?.message || 'An unexpected error occurred';
     switch (error.response.status) {
-      case 400:
-        error.message = error.response.data?.message || 'Bad request';
-        break;
-      case 403:
-        error.message = 'You are not authorized to perform this action';
-        break;
-      case 404:
-        error.message = 'The requested resource was not found';
-        break;
-      case 429:
-        error.message = 'Too many requests. Please wait before trying again.';
-        break;
-      case 500:
-        error.message = 'Server error. Please try again later.';
-        break;
-      default:
-        error.message = error.response.data?.message || 'Request failed';
+      case 400: errorMessage = 'Bad request'; break;
+      case 403: errorMessage = 'Unauthorized action'; break;
+      case 404: errorMessage = 'Resource not found'; break;
+      case 429: errorMessage = 'Too many requests'; break;
+      case 500: errorMessage = 'Server error'; break;
     }
 
-    // Add retry logic for server errors (5xx)
+    // Retry logic for server errors
     if (error.response.status >= 500 && 
         (!originalRequest._retryCount || originalRequest._retryCount < MAX_RETRIES)) {
       originalRequest._retryCount = (originalRequest._retryCount || 0) + 1;
+      const delay = RETRY_DELAY * originalRequest._retryCount;
       
       return new Promise(resolve => {
-        setTimeout(() => resolve(client(originalRequest)), 
-        RETRY_DELAY * originalRequest._retryCount);
+        setTimeout(() => resolve(client(originalRequest)), delay);
       });
     }
 
-    return Promise.reject(error);
+    const apiError = new Error(errorMessage);
+    apiError.status = error.response.status;
+    apiError.data = error.response.data;
+    return Promise.reject(apiError);
   }
 );
 
-// Add a method for health checks
+// Health check method
 client.checkConnection = async () => {
   try {
-    const response = await axios.get(`${API_BASE_URL}/health`, {
-      timeout: 5000
-    });
+    const response = await axios.get(`${API_BASE_URL}/health`, { timeout: 5000 });
     return response.status === 200;
   } catch (error) {
+    console.error('Health check failed:', error);
     return false;
+  }
+};
+
+// Profile fetch method
+client.fetchProfile = async () => {
+  try {
+    const response = await client.get('/api/user/profile');
+    return response.data;
+  } catch (error) {
+    console.error('Profile fetch error:', error);
+    throw error;
   }
 };
 
