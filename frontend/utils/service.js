@@ -6,7 +6,7 @@ import { router } from 'expo-router';
 // Base URL from environment or fallback
 const API_BASE_URL =
   Constants.expoConfig?.extra?.EXPO_PUBLIC_API_BASE_URL ||
-  "https://dating-app-3eba.onrender.com/";
+  "https://dating-app-3eba.onrender.com";
 
 console.log("🔗 API Base URL:", API_BASE_URL);
 

@@ -52,7 +52,77 @@ const handleError = (error, res) => {
 
 // ==================== CONTROLLER METHODS ====================
 
-// 1. Process Daily Subscription (KES 10 for 24 hours)
+// 1. Get Current User Profile (NEW)
+const getMyProfile = async (req, res) => {
+  try {
+    if (!req.user || !isValidId(req.user._id)) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required",
+        systemCode: "AUTH_REQUIRED"
+      });
+    }
+
+    const user = await User.findById(new mongoose.Types.ObjectId(req.user._id))
+      .select('-password -__v -verificationToken -resetToken')
+      .populate("crushes", "name profileImages")
+      .populate("matches", "name profileImages")
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+        systemCode: "USER_NOT_FOUND"
+      });
+    }
+
+    // Safe subscription handling
+    const subscription = user.subscription || {};
+    const isSubscribed = Boolean(subscription.isActive) && 
+      new Date(subscription.expiresAt) > new Date();
+
+    // Construct safe response
+    const responseData = {
+      ...user,
+      _id: String(user._id),
+      name: String(user.name || ''),
+      email: String(user.email || ''),
+      profileImages: (user.profileImages || []).map(img => String(img)),
+      subscriptionStatus: {
+        isActive: isSubscribed,
+        expiresAt: subscription.expiresAt instanceof Date 
+          ? subscription.expiresAt.toISOString() 
+          : null,
+        timeRemaining: isSubscribed 
+          ? formatDistanceToNow(new Date(subscription.expiresAt))
+          : null
+      },
+      crushes: user.crushes || [],
+      matches: user.matches || [],
+      lastActive: user.lastActive instanceof Date
+        ? user.lastActive.toISOString()
+        : null,
+      createdAt: user.createdAt instanceof Date
+        ? user.createdAt.toISOString()
+        : null
+    };
+
+    await User.updateOne(
+      { _id: new mongoose.Types.ObjectId(req.user._id) },
+      { $set: { lastActive: new Date() } }
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: responseData
+    });
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+// 2. Process Daily Subscription (KES 10 for 24 hours)
 const processSubscription = async (req, res) => {
   try {
     const userId = String(req.params.userId || '');
@@ -114,7 +184,7 @@ const processSubscription = async (req, res) => {
   }
 };
 
-// 2. Update Gender
+// 3. Update Gender
 const updateGender = async (req, res) => {
   try {
     const userId = String(req.params.userId || '');
@@ -160,7 +230,7 @@ const updateGender = async (req, res) => {
   }
 };
 
-// 3. Update user description
+// 4. Update user description
 const updateDescription = async (req, res) => {
   try {
     const userId = String(req.params.userId || '');
@@ -206,7 +276,7 @@ const updateDescription = async (req, res) => {
   }
 };
 
-// 4. Get user description
+// 5. Get user description
 const getDescription = async (req, res) => {
   try {
     const userId = String(req.params.userId || '');
@@ -240,7 +310,7 @@ const getDescription = async (req, res) => {
   }
 };
 
-// 5. Add profile images with subscription check
+// 6. Add profile images with subscription check
 const addProfileImages = async (req, res) => {
   try {
     const userId = String(req.params.userId || '');
@@ -327,7 +397,7 @@ const addProfileImages = async (req, res) => {
   }
 };
 
-// 6. Get user profile (Fully Hardened)
+// 7. Get user profile (Fully Hardened)
 const getProfile = async (req, res) => {
   try {
     const userId = String(req.params.userId || '');
@@ -409,7 +479,7 @@ const getProfile = async (req, res) => {
   }
 };
 
-// 7. Handle user likes
+// 8. Handle user likes
 const handleLike = async (req, res) => {
   try {
     const userId = String(req.params.userId || '');
@@ -463,7 +533,7 @@ const handleLike = async (req, res) => {
   }
 };
 
-// 8. Get subscription status
+// 9. Get subscription status
 const getSubscriptionStatus = async (req, res) => {
   try {
     if (!req.user || !isValidId(req.user._id)) {
@@ -514,7 +584,7 @@ const getSubscriptionStatus = async (req, res) => {
   }
 };
 
-// 9. Get notifications
+// 10. Get notifications
 const getNotifications = async (req, res) => {
   try {
     if (!req.user || !isValidId(req.user._id)) {
@@ -562,7 +632,7 @@ const getNotifications = async (req, res) => {
   }
 };
 
-// 10. Mark notification as read
+// 11. Mark notification as read
 const markNotificationRead = async (req, res) => {
   try {
     const notificationId = String(req.params.notificationId || '');
@@ -600,58 +670,6 @@ const markNotificationRead = async (req, res) => {
   }
 };
 
-// 11. Get current user data
-const getCurrentUser = async (req, res) => {
-  try {
-    if (!req.user || !isValidId(req.user._id)) {
-      return res.status(401).json({
-        success: false,
-        message: "Authentication required",
-        systemCode: "AUTH_REQUIRED"
-      });
-    }
-
-    const user = await User.findById(new mongoose.Types.ObjectId(req.user._id))
-      .select("-password -__v -verificationToken -resetToken")
-      .lean();
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-        systemCode: "USER_NOT_FOUND"
-      });
-    }
-
-    const safeUser = {
-      ...user,
-      _id: String(user._id),
-      name: String(user.name || ''),
-      email: String(user.email || ''),
-      profileImages: (user.profileImages || []).map(img => String(img)),
-      subscription: user.subscription ? {
-        ...user.subscription,
-        expiresAt: user.subscription.expiresAt instanceof Date
-          ? user.subscription.expiresAt.toISOString()
-          : null
-      } : null,
-      lastActive: user.lastActive instanceof Date
-        ? user.lastActive.toISOString()
-        : null,
-      createdAt: user.createdAt instanceof Date
-        ? user.createdAt.toISOString()
-        : null
-    };
-
-    return res.status(200).json({
-      success: true,
-      data: safeUser
-    });
-  } catch (error) {
-    handleError(error, res);
-  }
-};
-
 // 12. Update user preferences
 const updatePreferences = async (req, res) => {
   try {
@@ -680,7 +698,7 @@ const updatePreferences = async (req, res) => {
   }
 };
 
-// 12. Send message (missing method)
+// 13. Send message
 const sendMessage = async (req, res) => {
   try {
     const { recipientId, content } = req.body;
@@ -699,7 +717,7 @@ const sendMessage = async (req, res) => {
   }
 };
 
-// 13. Get conversation between two users
+// 14. Get conversation between two users
 const getConversation = async (req, res) => {
   try {
     const { recipientId } = req.params;
@@ -718,43 +736,7 @@ const getConversation = async (req, res) => {
   }
 };
 
-// 14. Add crush (e.g., to indicate interest)
-const addCrush = async (req, res) => {
-  try {
-    const { crushId } = req.params;
-    const userId = req.user._id;
-
-    // Implement logic to add a crush to the user's record.
-    // Placeholder response:
-    return res.status(200).json({
-      success: true,
-      message: `User ${userId} added crush ${crushId}`
-    });
-  } catch (error) {
-    console.error("addCrush error:", error);
-    return res.status(500).json({ success: false, error: "Failed to add crush" });
-  }
-};
-
-// 15. Remove crush
-const removeCrush = async (req, res) => {
-  try {
-    const { crushId } = req.params;
-    const userId = req.user._id;
-
-    // Implement logic to remove a crush from the user's record.
-    // Placeholder response:
-    return res.status(200).json({
-      success: true,
-      message: `User ${userId} removed crush ${crushId}`
-    });
-  } catch (error) {
-    console.error("removeCrush error:", error);
-    return res.status(500).json({ success: false, error: "Failed to remove crush" });
-  }
-};
-
-// 16. Delete user account
+// 15. Delete user account
 const deleteUserAccount = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -773,8 +755,9 @@ const deleteUserAccount = async (req, res) => {
 
 // Export all methods
 module.exports = {
-  updateGender, // Added the new gender update method
+  getMyProfile, // Added the new endpoint
   processSubscription,
+  updateGender,
   updateDescription,
   getDescription,
   addProfileImages,
@@ -783,12 +766,9 @@ module.exports = {
   getSubscriptionStatus,
   getNotifications,
   markNotificationRead,
-  getCurrentUser,
   updatePreferences,
   sendMessage,
   getConversation,
-  addCrush,
-  removeCrush,
   deleteUserAccount,
   handleError
 };

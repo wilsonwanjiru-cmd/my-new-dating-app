@@ -1,10 +1,9 @@
-
 // app/_config/index.js
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 
 // ==================== PRODUCTION CONFIGURATION ====================
-export const API_BASE_URL = 'https://dating-apps.onrender.com'; // No trailing slash!
+export const API_BASE_URL = 'https://dating-app-3eba.onrender.com'; // No trailing slash!
 export const API_TIMEOUT = 15000; // 15 seconds timeout
 export const MAX_API_RETRIES = 2; // Maximum retry attempts for failed requests
 export const API_RETRY_DELAY = 1000; // 1 second between retries
@@ -12,17 +11,17 @@ export const API_RETRY_DELAY = 1000; // 1 second between retries
 // Enhanced API Endpoints with absolute paths
 export const API_ENDPOINTS = {
   AUTH: {
-    LOGIN: '/api/auth/login', // Verified working endpoint
+    LOGIN: '/api/auth/login',
     REGISTER: '/api/auth/register',
-    PROFILE: '/api/auth/profile',
     LOGOUT: '/api/auth/logout',
-    REFRESH: '/api/auth/refresh-token', // Changed to match your backend
+    REFRESH: '/api/auth/refresh-token',
     VERIFY_EMAIL: '/api/auth/verify-email',
     RESET_PASSWORD: '/api/auth/reset-password',
-    HEALTH_CHECK: '/api/health' // Added health check endpoint
+    HEALTH_CHECK: '/api/health'
   },
   USERS: {
     BASE: '/api/users',
+    PROFILE: '/api/users/profile', // ✅ Corrected from /api/auth/profile
     GET_ONE: (userId) => `/api/users/${userId}`,
     UPDATE: (userId) => `/api/users/${userId}`,
     UPDATE_GENDER: (userId) => `/api/users/${userId}/gender`,
@@ -55,7 +54,7 @@ export const API_ENDPOINTS = {
     INITIATE: '/api/payments/initiate',
     VERIFY: '/api/payments/verify',
     HISTORY: '/api/payments/history',
-    SUBSCRIBE: '/api/payments/subscribe' // Added subscription endpoint
+    SUBSCRIBE: '/api/payments/subscribe'
   },
   MEDIA: {
     UPLOAD: '/api/media/upload',
@@ -67,9 +66,9 @@ export const API_ENDPOINTS = {
 export const AUTH_CONFIG = {
   TOKEN_KEY: 'authToken',
   REFRESH_TOKEN_KEY: 'refreshToken',
-  TOKEN_EXPIRY_BUFFER: 300000, // 5 minutes buffer
+  TOKEN_EXPIRY_BUFFER: 300000,
   PERSIST_USER_KEY: 'currentUser',
-  TOKEN_REFRESH_THRESHOLD: 60000 // 1 minute before token expires
+  TOKEN_REFRESH_THRESHOLD: 60000
 };
 
 // Improved headers with version and platform info
@@ -89,9 +88,9 @@ export const getHeaders = async (additionalHeaders = {}) => {
 
 // Connection Monitoring Configuration
 export const CONNECTION_CONFIG = {
-  HEALTH_CHECK_INTERVAL: 30000, // 30 seconds
-  HEALTH_CHECK_TIMEOUT: 5000, // 5 seconds
-  OFFLINE_RETRY_INTERVAL: 10000 // 10 seconds
+  HEALTH_CHECK_INTERVAL: 30000,
+  HEALTH_CHECK_TIMEOUT: 5000,
+  OFFLINE_RETRY_INTERVAL: 10000
 };
 
 // Production Services Configuration
@@ -119,31 +118,31 @@ export const FEATURE_FLAGS = {
     REQUIRE_SUBSCRIPTION: true,
     MAX_FREE_PHOTOS: 7,
     MAX_FREE_LIKES: 50,
-    FREE_TRIAL_DAYS: 0 // No free trial
+    FREE_TRIAL_DAYS: 0
   },
   VIDEO_CALL: {
     ENABLED: false,
-    MAX_DURATION: 30, // minutes
+    MAX_DURATION: 30,
     REQUIRE_BOTH_PREMIUM: true
   },
   NOTIFICATIONS: {
     PUSH_ENABLED: true,
     EMAIL_ENABLED: true,
     IN_APP_ENABLED: true,
-    MESSAGE_PREVIEW_FREE: false // Free users don't see message previews
+    MESSAGE_PREVIEW_FREE: false
   },
   OFFLINE_MODE: {
     ENABLED: false,
-    CACHE_DURATION: 3600 // 1 hour in seconds
+    CACHE_DURATION: 3600
   }
 };
 
-// Subscription Configuration (Updated for KES 10/24hrs model)
+// Subscription Configuration
 export const SUBSCRIPTION = {
   PLANS: {
     BASIC_24HR: {
-      PRICE: 10, // KES 10
-      DURATION: 24, // hours
+      PRICE: 10,
+      DURATION: 24,
       FEATURES: [
         'unlimited_messaging',
         'unlimited_photo_uploads',
@@ -153,8 +152,8 @@ export const SUBSCRIPTION = {
       PAYMENT_METHODS: ['mpesa']
     },
     PREMIUM_7DAY: {
-      PRICE: 50, // KES 50
-      DURATION: 168, // hours (7 days)
+      PRICE: 50,
+      DURATION: 168,
       FEATURES: [
         'priority_in_search',
         'read_receipts',
@@ -179,13 +178,12 @@ if (__DEV__) {
   console.log('[CONFIG] App Configuration Loaded');
   console.log('[CONFIG] API Base:', API_BASE_URL);
   console.log('[CONFIG] Environment:', Constants.expoConfig?.extra?.env || 'production');
-  
-  // Validate critical configuration
+
   if (!API_BASE_URL) {
     console.error('❌ Critical Error: API_BASE_URL is not configured');
     throw new Error('API base URL is required');
   }
-  
+
   if (!API_ENDPOINTS.AUTH.LOGIN) {
     console.error('❌ Critical Error: Login endpoint not configured');
     throw new Error('Login endpoint is required');
@@ -195,7 +193,7 @@ if (__DEV__) {
 // Helper function to build full API URLs
 export const buildApiUrl = (endpoint) => {
   if (endpoint.startsWith('http')) {
-    return endpoint; // Already a full URL
+    return endpoint;
   }
   return `${API_BASE_URL}${endpoint}`;
 };

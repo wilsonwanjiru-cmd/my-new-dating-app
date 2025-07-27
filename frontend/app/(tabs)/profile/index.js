@@ -10,12 +10,13 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
-  TextInput
 } from 'react-native';
 import { useAuth } from '../../_context/AuthContext';
-import apiClient from '../../_api/client';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import axios from 'axios';
 import { useNavigation } from 'expo-router';
 import SubscribeOverlay from '../../../components/SubscribeOverlay';
+import { updateUserGender } from '../../_api/users';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_BASE = 1000;
@@ -23,9 +24,19 @@ const RETRY_DELAY_BASE = 1000;
 export default function ProfileScreen({ route }) {
   const navigation = useNavigation();
   const { user: routeUser } = route?.params || {};
-  const { user: currentUser, isSubscribed, subscriptionExpiresAt, updateUser } = useAuth();
+  const {
+    user: currentUser,
+    isSubscribed,
+    subscriptionExpiresAt,
+    updateUser,
+    incrementPhotoView,
+    canViewMorePhotos,
+    getRemainingPhotoViews
+  } = useAuth();
 
   const profileUser = routeUser || currentUser;
+  const isOwnProfile = profileUser._id === currentUser._id;
+
   const [showSubscribeModal, setShowSubscribeModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [profileData, setProfileData] = useState(null);
@@ -38,49 +49,85 @@ export default function ProfileScreen({ route }) {
 
   const isExpired = subscriptionExpiresAt && new Date(subscriptionExpiresAt) < new Date();
 
-  const fetchProfileData = async () => {
-    if (!profileUser?._id) return;
-
+  const fetchUserProfile = async () => {
     try {
       setLoading(true);
-      const response = await apiClient.get(`/api/users/${profileUser._id}`, {
-        timeout: 10000 // 10 second timeout
-      });
-      
-      if (!response.data) {
-        throw new Error('No data received from server');
-      }
-      
-      setProfileData(response.data);
-      setSelectedGender(response.data.gender || '');
-      setVisiblePhotos(
-        (!isSubscribed || isExpired || profileUser._id !== currentUser._id) 
-          ? response.data.profileImages?.slice(0, 7) || []
-          : response.data.profileImages || []
-      );
-      setRetryCount(0);
       setLastError(null);
+      
+      // Get the target user ID (either from route params or current user)
+      const targetUserId = routeUser?._id || currentUser?._id;
+      
+      if (!targetUserId) {
+        throw new Error('User identification unavailable');
+      }
+
+      const token = await AsyncStorage.getItem('authToken');
+      if (!token) {
+        throw new Error('Authentication token missing');
+      }
+
+      const response = await axios.get(
+        `${process.env.EXPO_PUBLIC_API_BASE_URL}/api/users/${targetUserId}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          timeout: 8000,
+          validateStatus: (status) => status < 500 // Don't throw for 404
+        }
+      );
+
+      // Handle 404 specifically
+      if (response.status === 404) {
+        throw new Error('User profile not found');
+      }
+
+      if (!response.data) {
+        throw new Error('Invalid profile data received');
+      }
+
+      const data = response.data;
+      setProfileData(data);
+      setSelectedGender(data.gender || '');
+
+      // Handle photo visibility based on subscription status
+      let photosToShow = data.profileImages || [];
+      if (!isSubscribed || isExpired || !isOwnProfile) {
+        const remainingViews = isOwnProfile ? Infinity : getRemainingPhotoViews();
+        photosToShow = photosToShow.slice(0, remainingViews);
+      }
+
+      setVisiblePhotos(photosToShow);
+      setRetryCount(0);
     } catch (error) {
-      console.error('Error fetching profile:', error);
+      console.error('Profile fetch error:', {
+        message: error.message,
+        code: error.code,
+        status: error.response?.status,
+        url: error.config?.url
+      });
       setLastError(error);
 
-      // Handle network errors and server errors (5xx)
+      // Don't retry for 404 errors
+      if (error.message === 'User profile not found') {
+        Alert.alert('Error', 'The requested profile could not be found');
+        return;
+      }
+
       if ((error.code === 'ECONNABORTED' || 
-           error.message === 'Network Error' || 
-           error.response?.status >= 500) && 
+           error.message.includes('Network Error') || 
+           error.response?.status >= 500) &&
           retryCount < MAX_RETRIES) {
         const delay = RETRY_DELAY_BASE * Math.pow(2, retryCount);
         setTimeout(() => {
-          setRetryCount(retryCount + 1);
-          fetchProfileData();
+          setRetryCount(c => c + 1);
+          fetchUserProfile();
         }, delay);
         return;
       }
 
       Alert.alert(
-        'Error', 
-        error.response?.status === 502 
-          ? 'Our servers are temporarily unavailable. Please try again later.' 
+        'Error',
+        error.response?.status === 502
+          ? 'Our servers are temporarily unavailable. Please try again later.'
           : error.message || 'Unable to fetch profile data.'
       );
     } finally {
@@ -90,7 +137,7 @@ export default function ProfileScreen({ route }) {
 
   useEffect(() => {
     const unsubscribe = navigation.addListener('focus', () => {
-      fetchProfileData();
+      fetchUserProfile();
     });
     return unsubscribe;
   }, [navigation, profileUser?._id, isSubscribed, isExpired]);
@@ -103,14 +150,10 @@ export default function ProfileScreen({ route }) {
 
     try {
       setUpdatingGender(true);
-      const response = await apiClient.put(
-        `/api/users/${currentUser._id}/gender`,
-        { gender: selectedGender }
-      );
+      const token = await AsyncStorage.getItem('authToken');
+      if (!token) throw new Error('Authentication token missing');
 
-      if (!response.data) {
-        throw new Error('No data received from server');
-      }
+      await updateUserGender(currentUser._id, selectedGender, token);
 
       setProfileData(prev => ({ ...prev, gender: selectedGender }));
       updateUser({ ...currentUser, gender: selectedGender });
@@ -118,10 +161,7 @@ export default function ProfileScreen({ route }) {
       setShowGenderModal(false);
     } catch (error) {
       console.error('Gender update error:', error);
-      Alert.alert(
-        'Error', 
-        error.response?.data?.message || 'Failed to update gender'
-      );
+      Alert.alert('Error', error.response?.data?.message || 'Failed to update gender');
     } finally {
       setUpdatingGender(false);
     }
@@ -129,7 +169,23 @@ export default function ProfileScreen({ route }) {
 
   const handleRetry = () => {
     setRetryCount(0);
-    fetchProfileData();
+    fetchUserProfile();
+  };
+
+  const handleSubscriptionPress = () => {
+    setShowSubscribeModal(false);
+    navigation.navigate('subscribe');
+  };
+
+  const handlePhotoPress = async (index) => {
+    if (!isOwnProfile && !canViewMorePhotos()) {
+      setShowSubscribeModal(true);
+      return;
+    }
+
+    if (!isOwnProfile) {
+      await incrementPhotoView();
+    }
   };
 
   if (!profileUser?._id) {
@@ -146,7 +202,7 @@ export default function ProfileScreen({ route }) {
         <ActivityIndicator size="large" />
         {retryCount > 0 && (
           <Text style={styles.retryStatusText}>
-            Attempting to reconnect... ({retryCount}/{MAX_RETRIES})
+            Attempt {retryCount + 1} of {MAX_RETRIES + 1}
           </Text>
         )}
       </View>
@@ -157,14 +213,11 @@ export default function ProfileScreen({ route }) {
     return (
       <View style={styles.centered}>
         <Text style={styles.errorText}>
-          {lastError.response?.status === 502 
-            ? 'Server temporarily unavailable' 
-            : 'Failed to load profile'}
+          {lastError.response?.status === 502
+            ? 'Server temporarily unavailable'
+            : lastError.message || 'Failed to load profile'}
         </Text>
-        <TouchableOpacity 
-          style={styles.retryButton}
-          onPress={handleRetry}
-        >
+        <TouchableOpacity style={styles.retryButton} onPress={handleRetry}>
           <Text style={styles.retryButtonText}>
             {retryCount > 0 ? `Retrying... (${retryCount}/${MAX_RETRIES})` : 'Retry Now'}
           </Text>
@@ -172,13 +225,6 @@ export default function ProfileScreen({ route }) {
       </View>
     );
   }
-
-  const handleSubscriptionPress = () => {
-    setShowSubscribeModal(false);
-    navigation.navigate('subscribe');
-  };
-
-  const isOwnProfile = profileUser._id === currentUser._id;
 
   return (
     <View style={styles.container}>
@@ -190,19 +236,14 @@ export default function ProfileScreen({ route }) {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Gender</Text>
         {isOwnProfile ? (
-          <TouchableOpacity 
-            onPress={() => setShowGenderModal(true)}
-            style={styles.editField}
-          >
+          <TouchableOpacity onPress={() => setShowGenderModal(true)} style={styles.editField}>
             <Text style={styles.fieldValue}>
               {profileData?.gender || 'Not specified'}
               <Text style={styles.editText}> (Edit)</Text>
             </Text>
           </TouchableOpacity>
         ) : (
-          <Text style={styles.fieldValue}>
-            {profileData?.gender || 'Not specified'}
-          </Text>
+          <Text style={styles.fieldValue}>{profileData?.gender || 'Not specified'}</Text>
         )}
       </View>
 
@@ -220,14 +261,16 @@ export default function ProfileScreen({ route }) {
           data={visiblePhotos}
           numColumns={3}
           keyExtractor={(item, index) => index.toString()}
-          renderItem={({ item }) => (
-            <Image source={{ uri: item }} style={styles.photo} resizeMode="cover" />
+          renderItem={({ item, index }) => (
+            <TouchableOpacity onPress={() => handlePhotoPress(index)}>
+              <Image source={{ uri: item }} style={styles.photo} resizeMode="cover" />
+            </TouchableOpacity>
           )}
           ListEmptyComponent={
             <Text style={styles.noPhotosText}>No photos available</Text>
           }
           ListFooterComponent={
-            !isOwnProfile && !isSubscribed && profileData?.profileImages?.length > 7 && (
+            !isOwnProfile && !isSubscribed && profileData?.profileImages?.length > visiblePhotos.length && (
               <TouchableOpacity
                 style={styles.subscribeButton}
                 onPress={() => setShowSubscribeModal(true)}
@@ -256,7 +299,7 @@ export default function ProfileScreen({ route }) {
         <View style={styles.modalContainer}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Update Gender</Text>
-            
+
             <View style={styles.genderOptions}>
               {['male', 'female', 'non-binary', 'prefer-not-to-say'].map(gender => (
                 <TouchableOpacity
@@ -267,7 +310,10 @@ export default function ProfileScreen({ route }) {
                   ]}
                   onPress={() => setSelectedGender(gender)}
                 >
-                  <Text style={styles.genderOptionText}>
+                  <Text style={[
+                    styles.genderOptionText,
+                    selectedGender === gender && styles.selectedGenderOptionText
+                  ]}>
                     {gender.charAt(0).toUpperCase() + gender.slice(1)}
                   </Text>
                 </TouchableOpacity>
@@ -275,13 +321,13 @@ export default function ProfileScreen({ route }) {
             </View>
 
             <View style={styles.modalButtons}>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.cancelButton}
                 onPress={() => setShowGenderModal(false)}
               >
                 <Text style={styles.buttonText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.updateButton}
                 onPress={handleGenderUpdate}
                 disabled={updatingGender}

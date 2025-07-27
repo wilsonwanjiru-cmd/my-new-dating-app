@@ -4,7 +4,7 @@ import { useRouter } from "expo-router";
 import axios from "axios";
 
 // Use the environment variable for the backend URL
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://dating-app-3eba.onrender.com/";
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://dating-app-3eba.onrender.com";
 
 const UserChat = ({ item, userId }) => {
   const router = useRouter();

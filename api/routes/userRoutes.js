@@ -32,11 +32,19 @@ const createRoute = (handler, ...middlewares) => {
 
 // ========== Debug Middleware ==========
 router.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
   next();
 });
 
 // ========== User Profile ==========
+router.get("/:userId",
+  ...createRoute(
+    verifyMethod(UserController, 'getProfile'),
+    ValidateRequest.validateObjectId,
+    checkSubscription
+  )
+);
+
 router.put("/:userId/gender",
   (req, res, next) => {
     console.log(`Gender update request for ${req.params.userId}`);
@@ -47,14 +55,6 @@ router.put("/:userId/gender",
     authenticate,
     ValidateRequest.validateObjectId,
     ValidateRequest.validateGenderUpdate
-  )
-);
-
-router.get("/:userId",
-  ...createRoute(
-    verifyMethod(UserController, 'getProfile'),
-    ValidateRequest.validateObjectId,
-    checkSubscription
   )
 );
 
@@ -130,7 +130,7 @@ router.post("/:userId/like",
   )
 );
 
-// ========== Preferences & Messaging ==========
+// ========== Messaging ==========
 router.post("/:userId/messages",
   ...createRoute(
     verifyMethod(UserController, 'sendMessage'),
@@ -150,6 +150,7 @@ router.get("/:userId/messages/:recipientId",
   )
 );
 
+// ========== Preferences ==========
 router.put("/preferences",
   ...createRoute(
     verifyMethod(UserController, 'updatePreferences'),
@@ -169,14 +170,34 @@ router.delete("/:userId",
 // ========== Test Endpoint ==========
 router.put("/test-gender", (req, res) => {
   console.log("Test gender endpoint hit");
-  res.json({ 
+  res.json({
     success: true,
     message: "Test endpoint working",
     data: req.body
   });
 });
 
-// ========== Route Debug ==========
+// ========== 404 Fallback ==========
+router.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: "Endpoint not found",
+    path: req.originalUrl,
+    suggestion: "Check /health for available services"
+  });
+});
+
+// ========== Error Handler ==========
+router.use((err, req, res, next) => {
+  console.error("❌ Route error:", err.message);
+  res.status(500).json({
+    success: false,
+    error: "Internal server error",
+    details: process.env.NODE_ENV === "development" ? err.message : undefined
+  });
+});
+
+// ========== Route Logger ==========
 console.log("\n✅ Registered User Routes:");
 router.stack.forEach(layer => {
   if (layer.route) {
@@ -185,15 +206,5 @@ router.stack.forEach(layer => {
   }
 });
 console.log("");
-
-// ========== Error Handler ==========
-router.use((err, req, res, next) => {
-  console.error('❌ Route error:', err.message);
-  res.status(500).json({
-    success: false,
-    error: 'Internal server error',
-    details: process.env.NODE_ENV === 'development' ? err.message : undefined
-  });
-});
 
 module.exports = router;

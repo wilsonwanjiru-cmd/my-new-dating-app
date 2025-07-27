@@ -84,7 +84,7 @@ export const AuthProvider = ({ children }) => {
     return state.freePhotosViewed < FREE_PHOTO_LIMIT;
   }, [state.freePhotosViewed]);
 
-  // Login function
+  // ✅ Login function with userId saved to AsyncStorage
   const login = useCallback(async (credentials) => {
     try {
       setState(prev => ({ ...prev, isLoading: true, error: null }));
@@ -103,7 +103,8 @@ export const AuthProvider = ({ children }) => {
         AsyncStorage.setItem(AUTH_CONFIG.PERSIST_USER_KEY, JSON.stringify(user)),
         AsyncStorage.setItem(AUTH_CONFIG.TOKEN_KEY, token),
         AsyncStorage.setItem('lastPhotoViewDate', new Date().toISOString()),
-        AsyncStorage.setItem('freePhotosViewed', '0')
+        AsyncStorage.setItem('freePhotosViewed', '0'),
+        AsyncStorage.setItem('userId', user.id || user._id || '') // ✅ THIS LINE: Save userId explicitly
       ]);
 
       setState({
@@ -141,6 +142,7 @@ export const AuthProvider = ({ children }) => {
       await Promise.all([
         AsyncStorage.removeItem(AUTH_CONFIG.PERSIST_USER_KEY),
         AsyncStorage.removeItem(AUTH_CONFIG.TOKEN_KEY),
+        AsyncStorage.removeItem('userId')
       ]);
 
       setState({
