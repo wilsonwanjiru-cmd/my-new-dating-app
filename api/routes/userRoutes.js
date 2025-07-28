@@ -10,26 +10,6 @@ const MatchController = require("../controllers/matchController");
 const NotificationController = require("../controllers/notificationController");
 const PaymentController = require("../controllers/paymentController");
 
-// Method validator
-const verifyMethod = (controller, methodName) => {
-  if (!controller) throw new Error(`Controller is undefined`);
-  const fn = controller[methodName];
-  if (typeof fn !== 'function') {
-    throw new Error(`Controller method "${methodName}" is missing or not a function`);
-  }
-  return fn;
-};
-
-// Route creator
-const createRoute = (handler, ...middlewares) => {
-  const validated = middlewares.map(mw => {
-    if (typeof mw !== 'function') throw new Error(`Invalid middleware: ${mw}`);
-    return mw;
-  });
-  if (typeof handler !== 'function') throw new Error(`Invalid handler: ${typeof handler}`);
-  return [...validated, handler];
-};
-
 // ========== Debug Middleware ==========
 router.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
@@ -38,11 +18,10 @@ router.use((req, res, next) => {
 
 // ========== User Profile ==========
 router.get("/:userId",
-  ...createRoute(
-    verifyMethod(UserController, 'getProfile'),
-    ValidateRequest.validateObjectId,
-    checkSubscription
-  )
+  authenticate,
+  ValidateRequest.validateObjectId,
+  checkSubscription,
+  UserController.getProfile
 );
 
 router.put("/:userId/gender",
@@ -50,121 +29,96 @@ router.put("/:userId/gender",
     console.log(`Gender update request for ${req.params.userId}`);
     next();
   },
-  ...createRoute(
-    verifyMethod(UserController, 'updateGender'),
-    authenticate,
-    ValidateRequest.validateObjectId,
-    ValidateRequest.validateGenderUpdate
-  )
+  authenticate,
+  ValidateRequest.validateObjectId,
+  ValidateRequest.validateGenderUpdate,
+  UserController.updateGender
 );
 
 router.get("/:userId/description",
-  ...createRoute(
-    verifyMethod(UserController, 'getDescription'),
-    ValidateRequest.validateObjectId
-  )
+  authenticate,
+  ValidateRequest.validateObjectId,
+  UserController.getDescription
 );
 
 router.put("/:userId/description",
-  ...createRoute(
-    verifyMethod(UserController, 'updateDescription'),
-    authenticate,
-    ValidateRequest.validateObjectId,
-    ValidateRequest.validateDescriptionUpdate
-  )
+  authenticate,
+  ValidateRequest.validateObjectId,
+  ValidateRequest.validateDescriptionUpdate,
+  UserController.updateDescription
 );
 
 // ========== Profile Images ==========
 router.post("/:userId/profile-images",
-  ...createRoute(
-    verifyMethod(UserController, 'addProfileImages'),
-    authenticate,
-    ValidateRequest.validateObjectId,
-    checkSubscription,
-    restrictFreeUsers('profile image uploads')
-  )
+  authenticate,
+  ValidateRequest.validateObjectId,
+  checkSubscription,
+  restrictFreeUsers('profile image uploads'),
+  UserController.addProfileImages
 );
 
 // ========== Subscription ==========
 router.post("/:userId/subscribe",
-  ...createRoute(
-    verifyMethod(UserController, 'processSubscription'),
-    authenticate,
-    ValidateRequest.validateObjectId
-  )
+  authenticate,
+  ValidateRequest.validateObjectId,
+  UserController.processSubscription
 );
 
 router.get("/:userId/subscription-status",
-  ...createRoute(
-    verifyMethod(UserController, 'getSubscriptionStatus'),
-    authenticate,
-    ValidateRequest.validateObjectId
-  )
+  authenticate,
+  ValidateRequest.validateObjectId,
+  UserController.getSubscriptionStatus
 );
 
 // ========== Notifications ==========
 router.get("/:userId/notifications",
-  ...createRoute(
-    verifyMethod(UserController, 'getNotifications'),
-    authenticate,
-    ValidateRequest.validateObjectId
-  )
+  authenticate,
+  ValidateRequest.validateObjectId,
+  UserController.getNotifications
 );
 
 router.put("/:userId/notifications/read",
-  ...createRoute(
-    verifyMethod(UserController, 'markNotificationRead'),
-    authenticate,
-    ValidateRequest.validateObjectId
-  )
+  authenticate,
+  ValidateRequest.validateObjectId,
+  UserController.markNotificationRead
 );
 
 // ========== Match ==========
 router.post("/:userId/like",
-  ...createRoute(
-    verifyMethod(UserController, 'handleLike'),
-    authenticate,
-    ValidateRequest.validateObjectId,
-    checkSubscription,
-    restrictFreeUsers('liking profiles')
-  )
+  authenticate,
+  ValidateRequest.validateObjectId,
+  checkSubscription,
+  restrictFreeUsers('liking profiles'),
+  UserController.handleLike
 );
 
 // ========== Messaging ==========
 router.post("/:userId/messages",
-  ...createRoute(
-    verifyMethod(UserController, 'sendMessage'),
-    authenticate,
-    ValidateRequest.validateObjectId,
-    checkSubscription,
-    restrictFreeUsers('messaging')
-  )
+  authenticate,
+  ValidateRequest.validateObjectId,
+  checkSubscription,
+  restrictFreeUsers('messaging'),
+  UserController.sendMessage
 );
 
 router.get("/:userId/messages/:recipientId",
-  ...createRoute(
-    verifyMethod(UserController, 'getConversation'),
-    authenticate,
-    ValidateRequest.validateObjectId,
-    checkSubscription
-  )
+  authenticate,
+  ValidateRequest.validateObjectId,
+  checkSubscription,
+  UserController.getConversation
 );
 
 // ========== Preferences ==========
 router.put("/preferences",
-  ...createRoute(
-    verifyMethod(UserController, 'updatePreferences'),
-    authenticate
-  )
+  authenticate,
+  UserController.updatePreferences
 );
 
 // ========== Account ==========
 router.delete("/:userId",
-  ...createRoute(
-    verifyMethod(UserController, 'deleteUserAccount'),
-    authenticate,
-    ValidateRequest.validateObjectId
-  )
+  authenticate,
+  ValidateRequest.validateObjectId,
+  UserController.deleteUserAccount
 );
 
 // ========== Test Endpoint ==========

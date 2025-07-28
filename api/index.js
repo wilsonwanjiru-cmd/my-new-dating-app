@@ -10,6 +10,7 @@ const fs = require('fs');
 const morgan = require('morgan');
 const { Server } = require('socket.io');
 const { format } = require('date-fns');
+const jwt = require('jsonwebtoken'); // ✅ Added for token testing
 const app = express();
 const server = http.createServer(app);
 
@@ -140,6 +141,22 @@ const loadRoutes = () => {
     }
   });
 };
+
+// ==================== Test Token Decoding ====================
+app.get('/api/test-token', (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ success: false, message: 'No token provided' });
+    }
+    const token = authHeader.split(' ')[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    res.json({ success: true, message: 'Token decoded successfully', decoded });
+  } catch (err) {
+    console.error('Token decoding failed:', err.message);
+    res.status(401).json({ success: false, message: err.message });
+  }
+});
 
 // ==================== DB Init ====================
 const initializeDatabase = async () => {
