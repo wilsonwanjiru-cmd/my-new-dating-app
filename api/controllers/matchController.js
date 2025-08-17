@@ -1,345 +1,439 @@
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 const { ObjectId } = mongoose.Types;
 const User = require("../models/user");
+const Chat = require("../models/Chat");
+const Notification = require("../models/notification");
+const { formatDistanceToNow } = require("date-fns");
 
-// ==================== Controller Methods ====================
+// ==================== CONSTANTS ====================
+const MATCH_NOTIFICATION_COOLDOWN = 12 * 60 * 60 * 1000; // 12 hours
 
-/**
- * Get all likes sent by a user
- */
-const getUserLikes = async (req, res) => {
-  try {
-    const { userId } = req.query;
+// ==================== ERROR HANDLER ====================
+const handleError = (res, error, context = "match operation") => {
+  console.error(`❌ Error during ${context}:`, error);
 
-    if (!userId) {
-      return res.status(400).json({
-        success: false,
-        message: "User ID is required"
-      });
-    }
-
-    if (!ObjectId.isValid(userId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user ID format"
-      });
-    }
-
-    const user = await User.findById(userId)
-      .select('crushes')
-      .populate('crushes', '_id name profilePhoto');
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found"
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      count: user.crushes.length,
-      likes: user.crushes
-    });
-
-  } catch (error) {
-    console.error("Error retrieving user likes:", error);
-    res.status(500).json({
+  if (error instanceof mongoose.Error.CastError) {
+    return res.status(400).json({
       success: false,
-      message: "Internal server error",
-      error: process.env.NODE_ENV === 'development' ? error : undefined
+      code: "INVALID_ID",
+      message: "Invalid ID format",
     });
   }
+
+  return res.status(500).json({
+    success: false,
+    code: "SERVER_ERROR",
+    message: "An internal server error occurred",
+    error:
+      process.env.NODE_ENV === "development"
+        ? { message: error.message, stack: error.stack }
+        : undefined,
+  });
 };
 
-/**
- * Send a like to another user
- */
-const sendLike = async (req, res) => {
+// ==================== UTILITY FUNCTIONS ====================
+const getOppositeGender = (gender) => 
+  gender === 'male' ? 'female' : gender === 'female' ? 'male' : 'any';
+
+const getUserStatus = (userId, onlineUsers, lastActive) => {
+  if (onlineUsers.has(userId.toString())) return "online";
+  if (lastActive) return `last seen ${formatDistanceToNow(lastActive)} ago`;
+  return "offline";
+};
+
+// ==================== CONTROLLER METHODS ====================
+
+// ✅ Check mutual like & create match
+const createMatchIfMutual = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const { currentUserId, selectedUserId } = req.body;
+    const { targetUserId } = req.body;
+    const currentUserId = req.user._id;
 
-    if (!currentUserId || !selectedUserId) {
+    // Validate IDs
+    if (!ObjectId.isValid(targetUserId)) {
+      await session.abortTransaction();
       return res.status(400).json({
         success: false,
-        message: "Both user IDs are required"
+        code: "INVALID_ID",
+        message: "Invalid user ID format",
       });
     }
 
-    if (!ObjectId.isValid(currentUserId) || !ObjectId.isValid(selectedUserId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user ID format"
-      });
-    }
-
-    const [currentUser, selectedUser] = await Promise.all([
-      User.findById(currentUserId).select('crushes'),
-      User.findById(selectedUserId).select('crushes')
+    // Fetch users with necessary fields
+    const [currentUser, targetUser] = await Promise.all([
+      User.findById(currentUserId)
+        .select("name gender matches likedProfiles")
+        .session(session),
+      User.findById(targetUserId)
+        .select("name gender matches likedProfiles")
+        .session(session),
     ]);
 
-    if (!currentUser || !selectedUser) {
+    if (!currentUser || !targetUser) {
+      await session.abortTransaction();
       return res.status(404).json({
         success: false,
-        message: "User not found"
+        code: "USER_NOT_FOUND",
+        message: "User not found",
       });
     }
 
-    if (!currentUser.crushes.includes(selectedUserId)) {
-      await User.findByIdAndUpdate(currentUserId, {
-        $addToSet: { crushes: selectedUserId }
+    // Validate gender compatibility
+    const targetOpposite = getOppositeGender(targetUser.gender);
+    if (currentUser.gender !== targetOpposite && targetOpposite !== 'any') {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        code: "GENDER_MISMATCH",
+        message: "Cannot match with same gender user",
       });
     }
 
-    if (selectedUser.crushes.includes(currentUserId)) {
+    // Check if already matched
+    if (currentUser.matches.includes(targetUserId)) {
+      await session.abortTransaction();
       return res.status(200).json({
         success: true,
-        message: "It's a match!",
-        isMatch: true
+        message: "Already matched",
       });
     }
 
-    res.status(200).json({
-      success: true,
-      message: "Like sent successfully",
-      isMatch: false
-    });
-
-  } catch (error) {
-    console.error("Error sending like:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-      error: process.env.NODE_ENV === 'development' ? error : undefined
-    });
-  }
-};
-
-/**
- * Create a match between two users
- */
-const createMatch = async (req, res) => {
-  try {
-    const { currentUserId, selectedUserId } = req.body;
-
-    if (!currentUserId || !selectedUserId) {
-      return res.status(400).json({
-        success: false,
-        message: "Both user IDs are required"
+    // Check mutual like
+    const hasMutualLike = targetUser.likedProfiles?.includes(currentUserId.toString());
+    if (!hasMutualLike) {
+      await session.abortTransaction();
+      return res.status(200).json({
+        success: true,
+        message: "Like registered, waiting for mutual like",
       });
     }
 
-    if (!ObjectId.isValid(currentUserId) || !ObjectId.isValid(selectedUserId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user ID format"
-      });
-    }
-
-    const [currentUserExists, selectedUserExists] = await Promise.all([
-      User.exists({ _id: currentUserId }),
-      User.exists({ _id: selectedUserId })
-    ]);
-
-    if (!currentUserExists || !selectedUserExists) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found"
-      });
-    }
-
+    // Update matches
     await Promise.all([
-      User.findByIdAndUpdate(selectedUserId, {
-        $addToSet: { matches: currentUserId },
-        $pull: { crushes: currentUserId }
-      }),
-      User.findByIdAndUpdate(currentUserId, {
-        $addToSet: { matches: selectedUserId },
-        $pull: { receivedLikes: selectedUserId }
-      })
+      User.findByIdAndUpdate(
+        currentUserId,
+        { $addToSet: { matches: targetUserId } },
+        { session }
+      ),
+      User.findByIdAndUpdate(
+        targetUserId,
+        { $addToSet: { matches: currentUserId } },
+        { session }
+      ),
     ]);
 
-    res.status(200).json({
-      success: true,
-      message: "Match created successfully"
-    });
+    // Create chat if doesn't exist
+    const existingChat = await Chat.findOne({
+      participants: { $all: [currentUserId, targetUserId] },
+    }).session(session);
 
-  } catch (error) {
-    console.error("Error creating match:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-      error: process.env.NODE_ENV === 'development' ? error : undefined
+    if (!existingChat) {
+      await Chat.create(
+        [{
+          participants: [currentUserId, targetUserId],
+          messages: [],
+        }],
+        { session }
+      );
+    }
+
+    // Send match notifications
+    await Notification.insertMany(
+      [
+        {
+          user: targetUserId,
+          type: "match",
+          title: "It's a Match!",
+          message: `You and ${currentUser.name} liked each other.`,
+          from: currentUserId,
+        },
+        {
+          user: currentUserId,
+          type: "match",
+          title: "It's a Match!",
+          message: `You and ${targetUser.name} liked each other.`,
+          from: targetUserId,
+        },
+      ],
+      { session }
+    );
+
+    await session.commitTransaction();
+
+    res.status(201).json({
+      success: true,
+      message: "It's a Match!",
+      data: {
+        match: {
+          userId: targetUser._id,
+          name: targetUser.name,
+        },
+      },
     });
+  } catch (error) {
+    await session.abortTransaction();
+    handleError(res, error, "createMatchIfMutual");
+  } finally {
+    session.endSession();
   }
 };
 
-/**
- * Get all matches for a user
- */
+// ✅ Get all matches for current user
 const getMatches = async (req, res) => {
   try {
-    const { userId } = req.params;
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+    const skip = (page - 1) * limit;
+    const onlineUsers = req.app.get("onlineUsers") || new Set();
 
-    if (!userId) {
-      return res.status(400).json({
+    const user = await User.findById(req.user._id)
+      .select("matches")
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({
         success: false,
-        message: "User ID is required"
+        code: "USER_NOT_FOUND",
+        message: "User not found",
       });
     }
+
+    const matchIds = user.matches.slice(skip, skip + limit);
+    const totalMatches = user.matches.length;
+
+    const matches = await User.aggregate([
+      { $match: { _id: { $in: matchIds } } },
+      {
+        $project: {
+          _id: 1,
+          name: 1,
+          profileImages: { $slice: ["$profileImages", 1] },
+          gender: 1,
+          age: 1,
+          lastActive: 1,
+        },
+      },
+    ]);
+
+    const formattedMatches = matches.map(user => ({
+      id: user._id,
+      name: user.name,
+      photo: user.profileImages[0]?.url || null,
+      gender: user.gender,
+      age: user.age,
+      status: getUserStatus(user._id, onlineUsers, user.lastActive),
+    }));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        matches: formattedMatches,
+        pagination: {
+          currentPage: page,
+          totalPages: Math.ceil(totalMatches / limit),
+          totalItems: totalMatches,
+          limit,
+        },
+      },
+    });
+  } catch (error) {
+    handleError(res, error, "getMatches");
+  }
+};
+
+// ✅ Get match details
+const getMatchDetails = async (req, res) => {
+  try {
+    const { matchId } = req.params;
+    const onlineUsers = req.app.get("onlineUsers") || new Set();
+
+    if (!ObjectId.isValid(matchId)) {
+      return res.status(400).json({
+        success: false,
+        code: "INVALID_ID",
+        message: "Invalid match ID format",
+      });
+    }
+
+    // Verify match relationship
+    const isMatched = await User.exists({
+      _id: req.user._id,
+      matches: matchId,
+    });
+
+    if (!isMatched) {
+      return res.status(404).json({
+        success: false,
+        code: "NOT_MATCHED",
+        message: "This user is not in your matches",
+      });
+    }
+
+    const match = await User.findById(matchId)
+      .select("name profileImages bio age gender lastActive")
+      .lean();
+
+    if (!match) {
+      return res.status(404).json({
+        success: false,
+        code: "USER_NOT_FOUND",
+        message: "Match not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        id: match._id,
+        name: match.name,
+        photo: match.profileImages[0]?.url || null,
+        bio: match.bio,
+        age: match.age,
+        gender: match.gender,
+        status: getUserStatus(match._id, onlineUsers, match.lastActive),
+      },
+    });
+  } catch (error) {
+    handleError(res, error, "getMatchDetails");
+  }
+};
+
+// ✅ Unmatch with a user
+const unmatchUser = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { userId } = req.params;
+    const currentUserId = req.user._id;
 
     if (!ObjectId.isValid(userId)) {
+      await session.abortTransaction();
       return res.status(400).json({
         success: false,
-        message: "Invalid user ID format"
+        code: "INVALID_ID",
+        message: "Invalid user ID format",
       });
     }
 
-    const user = await User.findById(userId)
-      .select('matches')
-      .populate('matches', '_id name profilePhoto');
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found"
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      count: user.matches.length,
-      matches: user.matches
-    });
-
-  } catch (error) {
-    console.error("Error retrieving matches:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-      error: process.env.NODE_ENV === 'development' ? error : undefined
-    });
-  }
-};
-
-/**
- * Get all users who liked the current user (crushes)
- */
-const getCrushes = async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const cleanUserId = userId?.trim();
-
-    if (!cleanUserId) {
-      return res.status(400).json({
-        success: false,
-        message: "User ID is required"
-      });
-    }
-
-    if (!ObjectId.isValid(cleanUserId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user ID format"
-      });
-    }
-
-    const user = await User.findById(cleanUserId)
-      .select('crushes')
-      .populate('crushes', '_id name profilePhoto');
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found"
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      count: user.crushes.length,
-      crushes: user.crushes
-    });
-
-  } catch (error) {
-    console.error("Error retrieving crushes:", error);
-    if (error.name === 'CastError') {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user ID format"
-      });
-    }
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-      error: process.env.NODE_ENV === 'development' ? error : undefined
-    });
-  }
-};
-
-/**
- * Unmatch two users
- */
-const unmatch = async (req, res) => {
-  try {
-    const { currentUserId, selectedUserId } = req.body;
-
-    if (!currentUserId || !selectedUserId) {
-      return res.status(400).json({
-        success: false,
-        message: "Both user IDs are required"
-      });
-    }
-
-    if (!ObjectId.isValid(currentUserId) || !ObjectId.isValid(selectedUserId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user ID format"
-      });
-    }
-
-    const [currentUserExists, selectedUserExists] = await Promise.all([
-      User.exists({ _id: currentUserId }),
-      User.exists({ _id: selectedUserId })
-    ]);
-
-    if (!currentUserExists || !selectedUserExists) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found"
-      });
-    }
-
+    // Remove match relationship
     await Promise.all([
-      User.findByIdAndUpdate(selectedUserId, {
-        $pull: { matches: currentUserId }
-      }),
-      User.findByIdAndUpdate(currentUserId, {
-        $pull: { matches: selectedUserId }
-      })
+      User.findByIdAndUpdate(
+        currentUserId,
+        { $pull: { matches: userId } },
+        { session }
+      ),
+      User.findByIdAndUpdate(
+        userId,
+        { $pull: { matches: currentUserId } },
+        { session }
+      ),
     ]);
+
+    // Delete associated chat
+    await Chat.deleteOne({
+      participants: { $all: [currentUserId, userId] },
+    }).session(session);
+
+    // Send unmatch notification
+    await Notification.create(
+      {
+        user: userId,
+        type: "unmatch",
+        title: "Match Removed",
+        message: `${req.user.name} has unmatched with you`,
+        from: currentUserId,
+      },
+      { session }
+    );
+
+    await session.commitTransaction();
 
     res.status(200).json({
       success: true,
-      message: "Match removed successfully"
+      message: "Successfully unmatched",
     });
-
   } catch (error) {
-    console.error("Error removing match:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-      error: process.env.NODE_ENV === 'development' ? error : undefined
-    });
+    await session.abortTransaction();
+    handleError(res, error, "unmatchUser");
+  } finally {
+    session.endSession();
   }
 };
 
-// ==================== Exports ====================
+// ✅ Get potential matches (gender-filtered)
+const getPotentialMatches = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+    const skip = (page - 1) * limit;
+    const onlineUsers = req.app.get("onlineUsers") || new Set();
+
+    const currentUser = await User.findById(req.user._id)
+      .select("gender matches likedProfiles")
+      .lean();
+
+    if (!currentUser) {
+      return res.status(404).json({
+        success: false,
+        code: "USER_NOT_FOUND",
+        message: "Current user not found",
+      });
+    }
+
+    // Determine opposite gender for filtering
+    const targetGender = getOppositeGender(currentUser.gender);
+    
+    const query = {
+      _id: {
+        $ne: req.user._id,
+        $nin: [...currentUser.matches, ...(currentUser.likedProfiles || [])],
+      },
+      ...(targetGender !== 'any' && { gender: targetGender }),
+    };
+
+    const [potentialMatches, totalCount] = await Promise.all([
+      User.find(query)
+        .select("name profileImages age gender lastActive")
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      User.countDocuments(query),
+    ]);
+
+    const formattedMatches = potentialMatches.map(user => ({
+      id: user._id,
+      name: user.name,
+      photo: user.profileImages[0]?.url || null,
+      age: user.age,
+      gender: user.gender,
+      status: getUserStatus(user._id, onlineUsers, user.lastActive),
+    }));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        potentialMatches: formattedMatches,
+        pagination: {
+          currentPage: page,
+          totalPages: Math.ceil(totalCount / limit),
+          totalItems: totalCount,
+          limit,
+        },
+      },
+    });
+  } catch (error) {
+    handleError(res, error, "getPotentialMatches");
+  }
+};
+
 module.exports = {
-  getUserLikes,
-  sendLike,
-  createMatch,
+  createMatchIfMutual,
   getMatches,
-  getCrushes,
-  unmatch
+  getMatchDetails,
+  unmatchUser,
+  getPotentialMatches,
 };

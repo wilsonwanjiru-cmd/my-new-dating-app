@@ -1,153 +1,199 @@
-import { StyleSheet, Text, View, Pressable, Image, Alert } from "react-native";
+import { 
+  StyleSheet, 
+  Text, 
+  View, 
+  Pressable, 
+  Image, 
+  Alert,
+  ActivityIndicator
+} from "react-native";
 import React, { useState, useEffect } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage"; // For storing and retrieving data locally
-import atob from "atob"; // For decoding base64 (used by jwt-decode)
-import { jwtDecode } from "jwt-decode"; // For decoding JWT tokens
-import axios from "axios"; // For making HTTP requests
-import { useRouter } from "expo-router"; // For navigation
-
-// Use the environment variable for the backend URL
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://dating-app-3eba.onrender.com";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { jwtDecode } from "jwt-decode";
+import axios from "axios";
+import { useRouter } from "expo-router";
+import { useAuth } from '../../_context/AuthContext';
 
 const Select = () => {
   const router = useRouter();
-  const [option, setOption] = useState(""); // State to store the selected gender option
-  const [userId, setUserId] = useState(""); // State to store the user ID
+  const [option, setOption] = useState("");
+  const [userId, setUserId] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const { updateUser } = useAuth();
 
-  // Fetch the user ID from the JWT token stored in AsyncStorage
+  // Gender options with corresponding icons
+  const genderOptions = [
+    {
+      id: "male",
+      label: "I am a Man",
+      icon: "https://cdn-icons-png.flaticon.com/128/12442/12442425.png"
+    },
+    {
+      id: "female",
+      label: "I am a Woman",
+      icon: "https://cdn-icons-png.flaticon.com/128/9844/9844179.png"
+    },
+    {
+      id: "nonbinary",
+      label: "I am Non-Binary",
+      icon: "https://cdn-icons-png.flaticon.com/128/12442/12442425.png"
+    },
+    {
+      id: "prefer-not-to-say",
+      label: "Prefer not to say",
+      icon: "https://cdn-icons-png.flaticon.com/128/1828/1828884.png"
+    }
+  ];
+
   useEffect(() => {
     const fetchUser = async () => {
       try {
-        const token = await AsyncStorage.getItem("auth"); // Retrieve the token
+        const token = await AsyncStorage.getItem("authToken");
         if (token) {
-          const decodedToken = jwtDecode(token); // Decode the token
-          const userId = decodedToken.userId; // Extract the user ID
-          setUserId(userId); // Set the user ID in state
+          const decodedToken = jwtDecode(token);
+          setUserId(decodedToken.userId);
         }
       } catch (error) {
-        console.log("Error decoding token or fetching user ID:", error);
+        console.log("Error decoding token:", error);
       }
     };
 
     fetchUser();
   }, []);
 
-  // Update the user's gender
   const updateUserGender = async () => {
+    if (!option) {
+      Alert.alert("Error", "Please select a gender option");
+      return;
+    }
+
+    setIsLoading(true);
+    
     try {
+      // Update gender on backend
       const response = await axios.put(
         `${API_BASE_URL}/api/users/${userId}/gender`,
-        { gender: option }
+        { gender: option },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${await AsyncStorage.getItem('authToken')}`
+          }
+        }
       );
 
-      console.log("Update gender response:", response.data);
-
-      if (response.status === 200) {
-        Alert.alert("Success", "Gender updated successfully!");
-        router.replace("(tabs)/bio"); // Navigate to the bio screen
+      // Update user in context and local storage
+      if (updateUser) {
+        await updateUser({ gender: option });
       }
+
+      // Navigate directly to bio screen
+      router.replace("/(tabs)/bio");
+      
     } catch (error) {
       console.log("Error updating gender:", error);
-      Alert.alert("Error", "Failed to update gender.");
+      Alert.alert(
+        "Error", 
+        error.response?.data?.message || "Failed to update gender. Please try again."
+      );
+    } finally {
+      setIsLoading(false);
     }
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: "white", padding: 12 }}>
-      {/* Male Option */}
-      <Pressable
-        onPress={() => setOption("male")}
-        style={{
-          backgroundColor: "#F0F0F0",
-          padding: 12,
-          justifyContent: "space-between",
-          flexDirection: "row",
-          alignItems: "center",
-          marginTop: 25,
-          borderRadius: 5,
-          borderColor: option === "male" ? "#D0D0D0" : "transparent",
-          borderWidth: option === "male" ? 1 : 0,
-        }}
-      >
-        <Text style={{ fontSize: 16, fontWeight: "500" }}>I am a Man</Text>
-        <Image
-          style={{ width: 50, height: 50 }}
-          source={{
-            uri: "https://cdn-icons-png.flaticon.com/128/12442/12442425.png",
-          }}
-        />
-      </Pressable>
+    <View style={styles.container}>
+      <Text style={styles.title}>Select Your Gender</Text>
+      <Text style={styles.subtitle}>This helps us match you with compatible partners</Text>
 
-      {/* Female Option */}
-      <Pressable
-        onPress={() => setOption("female")}
-        style={{
-          backgroundColor: "#F0F0F0",
-          padding: 12,
-          justifyContent: "space-between",
-          flexDirection: "row",
-          alignItems: "center",
-          marginTop: 25,
-          borderRadius: 5,
-          borderColor: option === "female" ? "#D0D0D0" : "transparent",
-          borderWidth: option === "female" ? 1 : 0,
-        }}
-      >
-        <Text style={{ fontSize: 16, fontWeight: "500" }}>I am a Woman</Text>
-        <Image
-          style={{ width: 50, height: 50 }}
-          source={{
-            uri: "https://cdn-icons-png.flaticon.com/128/9844/9844179.png",
-          }}
-        />
-      </Pressable>
+      {genderOptions.map((gender) => (
+        <Pressable
+          key={gender.id}
+          onPress={() => setOption(gender.id)}
+          style={[
+            styles.optionContainer,
+            option === gender.id && styles.selectedOption
+          ]}
+        >
+          <Text style={styles.optionText}>{gender.label}</Text>
+          <Image
+            style={styles.optionIcon}
+            source={{ uri: gender.icon }}
+          />
+        </Pressable>
+      ))}
 
-      {/* Non-Binary Option */}
-      <Pressable
-        onPress={() => setOption("nonbinary")}
-        style={{
-          backgroundColor: "#F0F0F0",
-          padding: 12,
-          justifyContent: "space-between",
-          flexDirection: "row",
-          alignItems: "center",
-          marginTop: 25,
-          borderRadius: 5,
-          borderColor: option === "nonbinary" ? "#D0D0D0" : "transparent",
-          borderWidth: option === "nonbinary" ? 1 : 0,
-        }}
-      >
-        <Text style={{ fontSize: 16, fontWeight: "500" }}>I am Non-Binary</Text>
-        <Image
-          style={{ width: 50, height: 50 }}
-          source={{
-            uri: "https://cdn-icons-png.flaticon.com/128/12442/12442425.png",
-          }}
-        />
-      </Pressable>
-
-      {/* Done Button */}
       {option && (
         <Pressable
           onPress={updateUserGender}
-          style={{
-            marginTop: 25,
-            backgroundColor: "black",
-            padding: 12,
-            borderRadius: 4,
-          }}
+          style={styles.doneButton}
+          disabled={isLoading}
         >
-          <Text
-            style={{ textAlign: "center", color: "white", fontWeight: "600" }}
-          >
-            Done
-          </Text>
+          {isLoading ? (
+            <ActivityIndicator color="white" />
+          ) : (
+            <Text style={styles.doneButtonText}>Continue to Profile</Text>
+          )}
         </Pressable>
       )}
     </View>
   );
 };
 
-export default Select;
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "white",
+    padding: 20,
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: "bold",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  subtitle: {
+    fontSize: 16,
+    color: "gray",
+    marginBottom: 30,
+    textAlign: "center",
+  },
+  optionContainer: {
+    backgroundColor: "#F8F8F8",
+    padding: 15,
+    borderRadius: 10,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 15,
+    borderWidth: 1,
+    borderColor: "#F8F8F8",
+  },
+  selectedOption: {
+    borderColor: "#FF5864",
+    backgroundColor: "#FFF0F1",
+  },
+  optionText: {
+    fontSize: 16,
+    fontWeight: "500",
+  },
+  optionIcon: {
+    width: 40,
+    height: 40,
+  },
+  doneButton: {
+    marginTop: 30,
+    backgroundColor: "#FF5864",
+    padding: 15,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  doneButtonText: {
+    color: "white",
+    fontWeight: "600",
+    fontSize: 16,
+  },
+});
 
-const styles = StyleSheet.create({});
+export default Select;

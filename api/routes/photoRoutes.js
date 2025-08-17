@@ -1,48 +1,140 @@
-// routes/photoRoutes.js
-// routes/photoRoutes.js
 const express = require('express');
-const multer = require('multer');
-const path = require('path');
-const validateSubscription = require('../middlewares/validateSubscription');
-const photoController = require('../controllers/photoController');
-
 const router = express.Router();
+const rateLimit = require('express-rate-limit');
+const { authenticate } = require('../middlewares/authMiddleware');
+const { singlePhotoUpload } = require('../middlewares/multer');
+const {
+  getPhotoFeed,
+  uploadPhoto,
+  getUserPhotos,
+  deletePhoto,
+  initiateChat,
+  getPhotoById
+} = require('../controllers/photoController'); // Removed toggleLike
+const { testConnection } = require('../config/cloudinary');
 
-// Configure multer with memory storage
-const storage = multer.memoryStorage();
-const upload = multer({
-  storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // Limit file size to 5MB
-  fileFilter: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    if (!['.jpg', '.jpeg', '.png'].includes(ext)) {
-      return cb(new Error('Only JPG, JPEG, and PNG files are allowed.'));
-    }
-    cb(null, true);
+// ==================== DEBUG MIDDLEWARE ====================
+const logUpload = (req, res, next) => {
+  console.log('📥 Received upload request');
+  next();
+};
+
+// ==================== RATE LIMITING ====================
+const uploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  keyGenerator: (req) => req.user.id,
+  handler: (req, res) => {
+    res.status(429).json({
+      success: false,
+      code: 'UPLOAD_LIMIT_EXCEEDED',
+      message: 'Too many photo uploads. Please try again later.'
+    });
   }
 });
 
-// Upload photo to Cloudinary (protected)
-router.post(
-  '/upload',
-  validateSubscription,
-  upload.single('photo'),
-  async (req, res, next) => {
-    try {
-      if (!req.file) {
-        return res.status(400).json({ success: false, message: 'No file uploaded.' });
-      }
-      await photoController.uploadPhotoToCloudinary(req, res);
-    } catch (error) {
-      next(error);
-    }
+const interactionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  keyGenerator: (req) => req.user.id,
+  handler: (req, res) => {
+    res.status(429).json({
+      success: false,
+      code: 'INTERACTION_LIMIT',
+      message: 'Too many actions. Please slow down.'
+    });
   }
+});
+
+// ==================== TEST ROUTE ====================
+router.get('/test-cloudinary', async (req, res) => {
+  try {
+    const result = await testConnection();
+    res.status(result.success ? 200 : 500).json(result);
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'Cloudinary test failed unexpectedly'
+    });
+  }
+});
+
+// ==================== PHOTO FEED ROUTE ====================
+router.get('/feed', 
+  authenticate,
+  interactionLimiter,
+  getPhotoFeed
 );
 
-// Get all photos (protected)
-router.get('/all', validateSubscription, photoController.getAllPhotos);
+// ==================== PHOTO UPLOAD ROUTE ====================
+router.post(
+  '/',
+  authenticate,
+  uploadLimiter,
+  logUpload,
+  singlePhotoUpload,
+  (req, res, next) => {
+    if (req.file) {
+      console.log('✅ Multer processed file:', req.file.originalname);
+    }
+    next();
+  },
+  uploadPhoto
+);
 
-// Get free photos (public)
-router.get('/free', photoController.getFreePhotos);
+// ==================== USER PHOTOS ROUTE ====================
+router.get('/user', 
+  authenticate,
+  getUserPhotos
+);
 
-module.exports = router;
+// ==================== PHOTO DETAIL ROUTE ====================
+router.get('/:id', 
+  authenticate,
+  getPhotoById
+);
+
+// ==================== DELETE PHOTO ROUTE ====================
+router.delete('/:id', 
+  authenticate,
+  interactionLimiter,
+  deletePhoto
+);
+
+// ==================== CHAT INITIATION ROUTE ====================
+router.post('/initiate-chat', 
+  authenticate,
+  interactionLimiter,
+  initiateChat
+);
+
+// ==================== ERROR HANDLER ====================
+router.use((err, req, res, next) => {
+  if (err.name === 'MulterError') {
+    let status = 400;
+    if (err.code === 'LIMIT_FILE_SIZE') status = 413;
+    
+    return res.status(status).json({
+      success: false,
+      code: err.code,
+      message: err.message
+    });
+  }
+
+  if (err.message.includes('Cloudinary')) {
+    return res.status(500).json({
+      success: false,
+      code: 'CLOUDINARY_ERROR',
+      message: 'Image processing failed'
+    });
+  }
+
+  console.error('🚨 Unhandled error:', err);
+  res.status(500).json({
+    success: false,
+    code: 'SERVER_ERROR',
+    message: 'Internal server error'
+  });
+});
+
+module.exports = router;;

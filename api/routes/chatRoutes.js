@@ -1,195 +1,257 @@
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const chatController = require("../controllers/chatController");
-const { authenticate } = require("../middlewares/authMiddleware");
-const { checkSubscription } = require("../middlewares/subscriptionMiddleware");
+const { body, param, query } = require('express-validator');
+const rateLimit = require('express-rate-limit');
 
-// Apply authentication middleware to all chat routes
-router.use(authenticate);
+// Middleware imports
+const { authenticate } = require('../middlewares/authMiddleware');
+const { checkSubscription } = require('../middlewares/subscriptionMiddleware');
+const { 
+  ensureGenderSetup,
+  checkGenderCompatibility,
+  enforceGenderAccess
+} = require('../middlewares/genderMiddleware');
+const { validateRequest } = require('../middlewares/validateRequest');
+const rateLimiter = require('../middlewares/rateLimiter');
 
-// Apply subscription check middleware
-router.use(checkSubscription);
+// Controller imports
+const chatController = require('../controllers/chatController');
+
+// ==================== ROUTE DEBUGGING MIDDLEWARE ====================
+router.use((req, res, next) => {
+  console.log(`\n[Chat Router] ${req.method} ${req.originalUrl}`);
+  console.log('User:', req.user?._id);
+  console.log('Params:', req.params);
+  next();
+});
+
+// Apply global gender middlewares
+router.use(ensureGenderSetup);
+router.use(enforceGenderAccess);
+
+// ==================== VALIDATION RULES ====================
+const messageRules = [
+  body('content')
+    .trim()
+    .isLength({ min: 1, max: 2000 })
+    .withMessage('Message must be 1-2000 characters')
+];
+
+const initiateFromPhotoRules = [
+  body('initialMessage')
+    .optional()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage('Initial message cannot exceed 500 characters')
+];
+
+const paginationRules = [
+  query('limit')
+    .optional()
+    .isInt({ min: 1, max: 100 })
+    .withMessage('Limit must be between 1-100'),
+  query('before')
+    .optional()
+    .isISO8601()
+    .withMessage('Invalid timestamp format')
+];
+
+// ==================== RATE LIMITER ====================
+const messageRateLimiter = rateLimiter('15 requests per 5 minutes', 15, 5 * 60 * 1000);
+
+// ==================== CHAT ROUTES ====================
 
 /**
- * @swagger
- * tags:
- *   name: Chat
- *   description: User messaging endpoints
+ * Get conversations
  */
+router.get(
+  '/',
+  authenticate,
+  [
+    query('recipientId')
+      .optional()
+      .isMongoId()
+      .withMessage('Valid recipient ID required'),
+    ...paginationRules
+  ],
+  validateRequest,
+  chatController.getMessages
+);
 
 /**
- * @swagger
- * /api/chat:
- *   get:
- *     summary: Get chat messages between users
- *     tags: [Chat]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: recipientId
- *         schema:
- *           type: string
- *         required: true
- *         description: ID of the other user
- *     responses:
- *       200:
- *         description: List of messages
- *       403:
- *         description: Subscription required
+ * Send new message
+ * - Requires subscription
+ * - Rate limited
  */
-router.get("/", chatController.getMessages);
-
-/**
- * @swagger
- * /api/chat:
- *   post:
- *     summary: Send a new message
- *     tags: [Chat]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - recipientId
- *               - content
- *             properties:
- *               recipientId:
- *                 type: string
- *               content:
- *                 type: string
- *     responses:
- *       201:
- *         description: Message sent successfully
- *       403:
- *         description: Subscription required to send messages
- */
-router.post("/", 
-  // Restrict to paid users only
-  (req, res, next) => {
-    if (!req.hasActiveSubscription) {
-      return res.status(403).json({
-        success: false,
-        message: "Please subscribe for KES 10 to send messages",
-        upgradeRequired: true
-      });
-    }
-    next();
-  },
+router.post(
+  '/',
+  authenticate,
+  checkSubscription,
+  checkGenderCompatibility,
+  messageRateLimiter,
+  [
+    body('recipientId')
+      .isMongoId()
+      .withMessage('Valid recipient ID required'),
+    ...messageRules
+  ],
+  validateRequest,
   chatController.sendMessage
 );
 
 /**
- * @swagger
- * /api/chat/{messageId}:
- *   delete:
- *     summary: Delete a specific message
- *     tags: [Chat]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: messageId
- *         schema:
- *           type: string
- *         required: true
- *     responses:
- *       200:
- *         description: Message deleted
- *       404:
- *         description: Message not found
+ * Start chat from photo
+ * - Requires gender compatibility
+ * - Requires subscription
  */
-router.delete("/:messageId", chatController.deleteMessage);
+router.post(
+  '/initiate-from-photo/:photoId',
+  authenticate,
+  checkGenderCompatibility,
+  checkSubscription,
+  [
+    param('photoId')
+      .isMongoId()
+      .withMessage('Valid photo ID required'),
+    ...initiateFromPhotoRules
+  ],
+  validateRequest,
+  chatController.initiateFromPhoto
+);
 
 /**
- * @swagger
- * /api/chat/{messageId}:
- *   put:
- *     summary: Update a message
- *     tags: [Chat]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: messageId
- *         schema:
- *           type: string
- *         required: true
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               content:
- *                 type: string
- *     responses:
- *       200:
- *         description: Message updated
- *       403:
- *         description: Can only update your own messages
+ * Get unread messages count
  */
-router.put("/:messageId", chatController.updateMessage);
+router.get(
+  '/unread',
+  authenticate,
+  chatController.getUnreadMessages
+);
 
 /**
- * @swagger
- * /api/chat/{messageId}/read:
- *   patch:
- *     summary: Mark message as read
- *     tags: [Chat]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: messageId
- *         schema:
- *           type: string
- *         required: true
- *     responses:
- *       200:
- *         description: Message marked as read
- *       404:
- *         description: Message not found
+ * Mark message as read
  */
-router.patch("/:messageId/read", chatController.markMessageAsRead);
+router.patch(
+  '/:messageId/read',
+  authenticate,
+  [
+    param('messageId')
+      .isMongoId()
+      .withMessage('Valid message ID required')
+  ],
+  validateRequest,
+  chatController.markMessageAsRead
+);
 
 /**
- * @swagger
- * /api/chat/unread:
- *   get:
- *     summary: Get unread messages
- *     tags: [Chat]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: List of unread messages
+ * Update message (within edit window)
  */
-router.get("/unread", chatController.getUnreadMessages);
+router.put(
+  '/:messageId',
+  authenticate,
+  checkSubscription,
+  [
+    param('messageId')
+      .isMongoId()
+      .withMessage('Valid message ID required'),
+    ...messageRules
+  ],
+  validateRequest,
+  chatController.updateMessage
+);
 
 /**
- * @swagger
- * /api/chat/history:
- *   delete:
- *     summary: Delete chat history with a user
- *     tags: [Chat]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: userId
- *         schema:
- *           type: string
- *         required: true
- *     responses:
- *       200:
- *         description: Chat history deleted
+ * Delete message (soft delete)
  */
-router.delete("/history", chatController.deleteChatHistory);
+router.delete(
+  '/:messageId',
+  authenticate,
+  [
+    param('messageId')
+      .isMongoId()
+      .withMessage('Valid message ID required')
+  ],
+  validateRequest,
+  chatController.deleteMessage
+);
+
+/**
+ * Delete entire conversation
+ */
+router.delete(
+  '/conversation/:recipientId',
+  authenticate,
+  checkGenderCompatibility,
+  [
+    param('recipientId')
+      .isMongoId()
+      .withMessage('Valid user ID required')
+  ],
+  validateRequest,
+  chatController.deleteChatHistory
+);
+
+// ==================== ERROR HANDLERS ====================
+router.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    code: 'CHAT_ENDPOINT_NOT_FOUND',
+    message: "Chat endpoint not found",
+    path: req.path,
+    validEndpoints: [
+      'GET    / - Get conversations',
+      'POST   / - Send message',
+      'POST   /initiate-from-photo/:photoId - Start chat from photo',
+      'GET    /unread - Get unread count',
+      'PATCH  /:messageId/read - Mark as read',
+      'PUT    /:messageId - Update message',
+      'DELETE /:messageId - Delete message',
+      'DELETE /conversation/:recipientId - Delete conversation'
+    ]
+  });
+});
+
+router.use((err, req, res, next) => {
+  console.error("[ChatRoutes Error]", err);
+  
+  // Handle rate limit errors
+  if (err.type === 'rate-limit-exceeded') {
+    return res.status(429).json({
+      success: false,
+      code: 'CHAT_RATE_LIMIT_EXCEEDED',
+      message: "Too many chat requests. Please wait before trying again."
+    });
+  }
+  
+  // Handle gender compatibility errors
+  if (err.code === 'GENDER_PREFERENCE_MISMATCH') {
+    return res.status(403).json({
+      success: false,
+      code: err.code,
+      message: err.message
+    });
+  }
+
+  res.status(500).json({
+    success: false,
+    code: 'CHAT_SYSTEM_ERROR',
+    message: "Internal server error in chat system",
+    error: process.env.NODE_ENV === 'development' ? {
+      message: err.message,
+      stack: err.stack
+    } : undefined
+  });
+});
+
+// ==================== ROUTE DEBUGGING ====================
+console.log('\n🔍 Final Chat Route Stack:');
+router.stack.forEach((layer, index) => {
+  if (layer.route) {
+    const methods = Object.keys(layer.route.methods)
+      .map(method => method.toUpperCase())
+      .join(', ');
+    console.log(`Route ${index.toString().padStart(2)}: ${methods.padEnd(8)} ${layer.route.path}`);
+  }
+});
 
 module.exports = router;

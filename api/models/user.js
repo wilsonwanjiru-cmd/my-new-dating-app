@@ -33,25 +33,40 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Phone number is required for M-Pesa'],
     validate: {
-      validator: v => /^\+?254[0-9]{9}$/.test(v),
+      validator: v => /^(\+?254|0)[17]\d{8}$/.test(v),
       message: props => `${props.value} is not a valid Kenyan phone number!`
     }
   },
 
-  // Profile Information
+  // Profile Information - UPDATED TO MATCH BLUEPRINT
   gender: {
     type: String,
-    enum: ['male', 'female', 'non-binary', 'prefer-not-to-say'],
-    required: false
+    enum: ['male', 'female', 'non-binary'],
+    required: [true, 'Gender is required']
+  },
+  genderPreference: {
+    type: [String],
+    enum: ['male', 'female', 'non-binary'],
+    required: [true, 'Gender preference is required'],
+    validate: {
+      validator: function(v) {
+        return v && v.length > 0;
+      },
+      message: 'At least one gender preference is required'
+    }
+  },
+  profileComplete: {
+    type: Boolean,
+    default: false
   },
   age: {
     type: Number,
     min: [18, 'You must be at least 18 years old'],
     max: [100, 'Age cannot exceed 100 years']
   },
-  description: {
+  bio: {
     type: String,
-    maxlength: [500, 'Description cannot exceed 500 characters']
+    maxlength: [500, 'Bio cannot exceed 500 characters']
   },
   profileImages: [{
     url: {
@@ -62,93 +77,84 @@ const userSchema = new mongoose.Schema({
         message: 'Invalid image URL'
       }
     },
-    publicId: { type: String, required: true },
-    uploadedAt: { type: Date, default: Date.now }
-  }],
-  location: {
-    type: {
-      type: String,
-      default: 'Point',
-      enum: ['Point'],
+    publicId: { 
+      type: String, 
       required: true
     },
-    coordinates: {
-      type: [Number],
-      required: true,
-      validate: {
-        validator: function(v) {
-          return Array.isArray(v) &&
-            v.length === 2 &&
-            typeof v[0] === 'number' &&
-            typeof v[1] === 'number' &&
-            v[0] >= -180 && v[0] <= 180 &&
-            v[1] >= -90 && v[1] <= 90;
-        },
-        message: props => `Invalid coordinates: ${props.value}. Must be [longitude, latitude]`
-      },
-      default: [36.8219, -1.2921]
-    },
-    address: { type: String, trim: true },
-    lastUpdated: { type: Date, default: Date.now }
+    likes: { type: Number, default: 0 },
+    likedBy: [{ 
+      type: mongoose.Schema.Types.ObjectId, 
+      ref: 'User' 
+    }],
+    uploadedAt: { type: Date, default: Date.now }
+  }],
+
+  // Online Status & Activity - UPDATED FOR SOCKET.IO TRACKING
+  isOnline: {
+    type: Boolean,
+    default: false
   },
   lastActive: {
     type: Date,
     default: Date.now
   },
+  socketId: String,
+  activeSessions: [String],
 
-  // Subscription Info
-  subscription: {
-    isActive: { type: Boolean, default: false },
-    expiresAt: { type: Date, default: null },
-    lastPayment: {
-      amount: {
-        type: Number,
-        default: 10,
-        validate: {
-          validator: v => v === 10,
-          message: 'Subscription amount must be KES 10'
-        }
-      },
-      date: { type: Date, default: null },
-      mpesaCode: {
-        type: String,
-        validate: {
-          validator: v => /^[A-Z0-9]{10}$/.test(v),
-          message: 'Invalid M-Pesa transaction code'
-        }
-      },
-      phoneNumber: {
-        type: String,
-        validate: {
-          validator: v => /^\+?254[0-9]{9}$/.test(v),
-          message: 'Invalid M-Pesa phone number'
-        }
+  // Location
+  location: {
+    type: {
+      type: String,
+      default: 'Point',
+      enum: ['Point']
+    },
+    coordinates: {
+      type: [Number],
+      index: '2dsphere',
+      validate: {
+        validator: function(v) {
+          return v.length === 2 && 
+          v[0] >= -180 && v[0] <= 180 && 
+          v[1] >= -90 && v[1] <= 90;
+        },
+        message: 'Invalid coordinates'
       }
     },
-    paymentHistory: [{
-      amount: { type: Number, default: 10 },
-      date: Date,
-      mpesaCode: String,
-      phoneNumber: String
-    }]
-  },
-  freeUploadsUsed: {
-    type: Number,
-    default: 0,
-    min: 0,
-    max: 7
+    lastUpdated: Date
   },
 
-  // Social Features
-  likesReceived: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-  matches: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-  crushes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-  preferences: {
-    gender: {
-      type: String,
-      enum: ['male', 'female', 'non-binary', 'any'],
-      default: 'any'
+  // Subscription Info - UPDATED FOR REAL-TIME VALIDATION
+  subscription: {
+    isActive: {
+      type: Boolean,
+      default: false
     },
+    startsAt: Date,
+    expiresAt: Date,
+    lastPayment: {
+      amount: Number,
+      date: Date,
+      mpesaCode: String
+    }
+  },
+
+  // Social Features - OPTIMIZED FOR DATING APP
+  likesReceived: [{ 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'User' 
+  }],
+  matches: [{ 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'User' 
+  }],
+  likedPhotos: [{ 
+    photoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Photo' },
+    ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    likedAt: { type: Date, default: Date.now }
+  }],
+
+  // Preferences - SIMPLIFIED
+  preferences: {
     ageRange: {
       min: { type: Number, default: 18, min: 18 },
       max: { type: Number, default: 100, max: 100 }
@@ -161,20 +167,7 @@ const userSchema = new mongoose.Schema({
     }
   },
 
-  // Notifications
-  notifications: [{
-    type: {
-      type: String,
-      enum: ['new_like', 'new_match', 'new_message', 'subscription_expiry']
-    },
-    from: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    message: String,
-    read: { type: Boolean, default: false },
-    requiresSubscription: { type: Boolean, default: false },
-    createdAt: { type: Date, default: Date.now }
-  }],
-
-  // Account Verification & Security
+  // Account Security
   isVerified: { type: Boolean, default: false },
   verificationToken: String,
   verificationTokenExpires: Date,
@@ -182,9 +175,7 @@ const userSchema = new mongoose.Schema({
   resetTokenExpires: Date,
   failedLoginAttempts: { type: Number, default: 0 },
   accountLocked: { type: Boolean, default: false },
-  lockUntil: { type: Date },
-  lastLogin: { type: Date },
-  refreshToken: { type: String }
+  lockUntil: { type: Date }
 
 }, {
   timestamps: true,
@@ -195,30 +186,33 @@ const userSchema = new mongoose.Schema({
       delete ret.verificationToken;
       delete ret.resetToken;
       delete ret.__v;
+      delete ret.socketId;
+      delete ret.activeSessions;
+      // Include virtual subscription status in output
+      ret.isSubscribed = doc.isSubscribed;
       return ret;
     }
   }
 });
 
-// Indexes
-userSchema.index({ email: 1 }, { unique: true });
+// ======================
+// INDEXES - OPTIMIZED FOR QUERIES
+// ======================
 userSchema.index({ location: '2dsphere' });
 userSchema.index({ lastActive: -1 });
+userSchema.index({ isOnline: 1 });
+userSchema.index({ 'subscription.expiresAt': 1 }); // Optimized for subscription checks
+userSchema.index({ gender: 1 });
+userSchema.index({ genderPreference: 1 });
+userSchema.index({ profileComplete: 1 });
 
-// Pre-save: Handle location
-userSchema.pre('save', function(next) {
-  if (this.isModified('location') && this.location) {
-    if (!Array.isArray(this.location.coordinates) || this.location.coordinates.length !== 2) {
-      this.location.coordinates = [36.8219, -1.2921];
-    }
-    this.location.lastUpdated = new Date();
-  }
-  next();
-});
-
-// Pre-save: Hash password only if modified
+// ======================
+// PRE-SAVE HOOKS - UPDATED
+// ======================
 userSchema.pre('save', async function(next) {
+  // Skip password hashing if password not modified
   if (!this.isModified('password')) return next();
+  
   try {
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
@@ -228,61 +222,98 @@ userSchema.pre('save', async function(next) {
   }
 });
 
-// Compare passwords
+// Auto-set profileComplete when gender preferences are set
+userSchema.pre('save', function(next) {
+  if (this.isModified('genderPreference') || this.isModified('gender')) {
+    this.profileComplete = !!this.gender && 
+                           Array.isArray(this.genderPreference) && 
+                           this.genderPreference.length > 0;
+  }
+  next();
+});
+
+// ======================
+// VIRTUAL PROPERTIES - UPDATED FOR REAL-TIME SUBSCRIPTION
+// ======================
+userSchema.virtual('isSubscribed').get(function() {
+  if (!this.subscription || !this.subscription.expiresAt) return false;
+  return this.subscription.expiresAt > new Date();
+});
+
+userSchema.virtual('subscriptionStatus').get(function() {
+  return {
+    isActive: this.isSubscribed,
+    expiresAt: this.subscription?.expiresAt,
+    timeRemaining: this.subscription?.expiresAt ? 
+      formatDistanceToNow(new Date(this.subscription.expiresAt)) : null
+  };
+});
+
+userSchema.virtual('photoCount').get(function() {
+  return this.profileImages.length;
+});
+
+userSchema.virtual('totalLikes').get(function() {
+  return this.profileImages.reduce((sum, img) => sum + img.likes, 0);
+});
+
+userSchema.virtual('statusIndicator').get(function() {
+  return {
+    isOnline: this.isOnline,
+    lastSeen: formatDistanceToNow(this.lastActive) + ' ago'
+  };
+});
+
+// ======================
+// INSTANCE METHODS - UPDATED FOR BLUEPRINT
+// ======================
 userSchema.methods.comparePassword = async function(candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
 
-// Subscription status virtual
-userSchema.virtual('subscriptionStatus').get(function() {
-  return {
-    isActive: this.subscription?.isActive && new Date(this.subscription.expiresAt) > new Date(),
-    expiresAt: this.subscription?.expiresAt,
-    timeRemaining: this.subscription?.expiresAt
-      ? formatDistanceToNow(new Date(this.subscription.expiresAt))
-      : null
-  };
-});
+userSchema.methods.hasLikedPhoto = function(photoId) {
+  return this.likedPhotos.some(photo => photo.photoId.equals(photoId));
+};
 
-// Location formatted virtual
-userSchema.virtual('location.formatted').get(function() {
-  if (!this.location || !this.location.coordinates) return 'Location not set';
-  return `Lat: ${this.location.coordinates[1]}, Long: ${this.location.coordinates[0]}`;
-});
-
-// M-Pesa payment method
-userSchema.methods.initiateMpesaPayment = async function() {
+userSchema.methods.getSubscriptionStatus = function() {
   return {
-    phoneNumber: this.phoneNumber,
-    amount: 10,
-    accountReference: `Ruda-${this._id}`,
-    transactionDesc: 'Ruda Dating Premium Subscription'
+    isActive: this.isSubscribed,
+    expiresAt: this.subscription?.expiresAt
   };
 };
 
-// Activate subscription
-userSchema.methods.activateSubscription = function(mpesaResponse) {
+userSchema.methods.markOnline = function(socketId) {
+  this.isOnline = true;
+  this.lastActive = new Date();
+  if (!this.activeSessions.includes(socketId)) {
+    this.activeSessions.push(socketId);
+  }
+  return this.save();
+};
+
+userSchema.methods.markOffline = function(socketId) {
+  this.activeSessions = this.activeSessions.filter(id => id !== socketId);
+  if (this.activeSessions.length === 0) {
+    this.isOnline = false;
+  }
+  return this.save();
+};
+
+userSchema.methods.updateActivity = function() {
+  this.lastActive = new Date();
+  return this.save();
+};
+
+userSchema.methods.activateSubscription = function(durationHours = 24) {
+  const now = new Date();
   this.subscription = {
     isActive: true,
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-    lastPayment: {
-      amount: 10,
-      date: new Date(),
-      mpesaCode: mpesaResponse.TransactionID,
-      phoneNumber: mpesaResponse.PhoneNumber
-    },
-    paymentHistory: [
-      ...(this.subscription?.paymentHistory || []),
-      {
-        amount: 10,
-        date: new Date(),
-        mpesaCode: mpesaResponse.TransactionID,
-        phoneNumber: mpesaResponse.PhoneNumber
-      }
-    ]
+    startsAt: now,
+    expiresAt: new Date(now.getTime() + durationHours * 60 * 60 * 1000)
   };
   return this.save();
 };
 
 const User = mongoose.model('User', userSchema);
+
 module.exports = User;

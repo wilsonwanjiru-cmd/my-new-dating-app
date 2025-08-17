@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const notificationController = require('../controllers/notificationController');
 const { authenticate } = require('../middlewares/authMiddleware');
-const { validateObjectId } = require('../middlewares/validateRequest');
+const ValidateRequest = require('../middlewares/validateRequest');
 
 /**
  * @swagger
@@ -11,142 +11,104 @@ const { validateObjectId } = require('../middlewares/validateRequest');
  *   description: User notification management
  */
 
-// Apply authentication middleware to all notification routes
-router.use(authenticate);
+// ================== SAFETY CHECK ==================
+if (!notificationController) {
+  throw new Error("❌ notificationController is missing or not exported properly.");
+}
+
+// Verify ValidateRequest middleware
+if (!ValidateRequest || !ValidateRequest.validateObjectIdParam) {
+  throw new Error("❌ ValidateRequest middleware is missing required validation functions");
+}
+
+// Destructure controller methods for validation
+const {
+  getNotifications,
+  markAllAsRead,
+  markSingleAsRead,
+  getUnreadCount,
+  deleteNotification
+} = notificationController;
+
+if (!getNotifications || !markAllAsRead || !markSingleAsRead || !getUnreadCount || !deleteNotification) {
+  throw new Error("❌ One or more methods are missing in notificationController. Verify exports in notificationController.js");
+}
+
+// ================== GLOBAL MIDDLEWARE ==================
+router.use(authenticate); // Require authentication for all notification routes
+
+// ================== ROUTES ==================
 
 /**
  * @swagger
  * /api/notifications:
  *   get:
  *     summary: Get all user notifications
- *     tags: [Notifications]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: limit
- *         schema:
- *           type: integer
- *           default: 20
- *         description: Maximum number of notifications to return
- *       - in: query
- *         name: page
- *         schema:
- *           type: integer
- *           default: 1
- *         description: Page number for pagination
- *     responses:
- *       200:
- *         description: List of user notifications
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 data:
- *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/Notification'
- *       401:
- *         description: Unauthorized
  */
-router.get('/', notificationController.getNotifications);
+router.get('/', getNotifications);
 
 /**
  * @swagger
  * /api/notifications/read:
  *   put:
  *     summary: Mark all notifications as read
- *     tags: [Notifications]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: All notifications marked as read
- *       401:
- *         description: Unauthorized
  */
-router.put('/read', notificationController.markAllAsRead);
+router.put('/read', markAllAsRead);
 
 /**
  * @swagger
  * /api/notifications/{notificationId}/read:
  *   put:
  *     summary: Mark a single notification as read
- *     tags: [Notifications]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: notificationId
- *         required: true
- *         schema:
- *           type: string
- *         description: ID of the notification to mark as read
- *     responses:
- *       200:
- *         description: Notification marked as read
- *       400:
- *         description: Invalid notification ID
- *       401:
- *         description: Unauthorized
- *       404:
- *         description: Notification not found
  */
-router.put('/:notificationId/read', validateObjectId, notificationController.markSingleAsRead);
+router.put('/:notificationId/read', ValidateRequest.validateObjectIdParam('notificationId'), markSingleAsRead);
 
 /**
  * @swagger
  * /api/notifications/unread-count:
  *   get:
  *     summary: Get count of unread notifications
- *     tags: [Notifications]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Returns count of unread notifications
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 count:
- *                   type: integer
- *       401:
- *         description: Unauthorized
  */
-router.get('/unread-count', notificationController.getUnreadCount);
+router.get('/unread-count', getUnreadCount);
 
 /**
  * @swagger
  * /api/notifications/{notificationId}:
  *   delete:
  *     summary: Delete a notification
- *     tags: [Notifications]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: notificationId
- *         required: true
- *         schema:
- *           type: string
- *         description: ID of the notification to delete
- *     responses:
- *       200:
- *         description: Notification deleted successfully
- *       400:
- *         description: Invalid notification ID
- *       401:
- *         description: Unauthorized
- *       404:
- *         description: Notification not found
  */
-router.delete('/:notificationId', validateObjectId, notificationController.deleteNotification);
+router.delete('/:notificationId', ValidateRequest.validateObjectIdParam('notificationId'), deleteNotification);
+
+// ================== 404 FALLBACK ==================
+router.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: "Notification endpoint not found",
+    path: req.path,
+    suggestion: "Check API documentation for available notification endpoints"
+  });
+});
+
+// ================== ERROR HANDLER ==================
+router.use((err, req, res, next) => {
+  console.error("NotificationRoutes Error:", err);
+  res.status(500).json({
+    success: false,
+    message: "Internal server error in Notification Routes",
+    error: process.env.NODE_ENV === "development" ? err.message : undefined
+  });
+});
+
+// ================== ROUTE LOGGER ==================
+console.log("\n✅ Registered Notification Routes:");
+router.stack.forEach(layer => {
+  if (layer.route && layer.route.path) {
+    const methods = Object.keys(layer.route.methods)
+      .map(m => m.toUpperCase())
+      .join(", ");
+    console.log(`  ${methods.padEnd(6)} ${layer.route.path}`);
+  }
+});
+console.log("");
 
 module.exports = router;

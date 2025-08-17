@@ -1,265 +1,132 @@
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const MatchController = require("../controllers/matchController");
-const ValidateRequest = require("../middlewares/validateRequest");
+const { query, param, body } = require('express-validator');
 
-// ==================== Route Definitions ====================
+// ==================== MIDDLEWARES ====================
+const authMiddleware = require('../middlewares/authMiddleware'); // Fixed import
+const validateRequestModule = require('../middlewares/validateRequest'); // Fixed import
+const validateRequest = validateRequestModule.validateRequest; // Extract the function
 
-/**
- * @swagger
- * /api/match/user-matches/{userId}:
- *   get:
- *     summary: Get all matches for a specific user
- *     tags: [Matches]
- *     parameters:
- *       - in: path
- *         name: userId
- *         required: true
- *         schema:
- *           type: string
- *         description: The user ID
- *     responses:
- *       200:
- *         description: List of matches
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 matches:
- *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/User'
- *       400:
- *         description: Invalid user ID format
- *       404:
- *         description: User not found
- *       500:
- *         description: Internal server error
- */
+// ==================== CONTROLLER IMPORT ====================
+const matchController = require('../controllers/matchController');
+
+console.log('[matchRoutes] Loaded matchController keys:', Object.keys(matchController));
+
+// ==================== VALIDATION RULES ====================
+const paginationRules = [
+  query('page').optional().isInt({ min: 1 }).toInt(),
+  query('limit').optional().isInt({ min: 1, max: 100 }).toInt()
+];
+
+const matchIdRules = [
+  param('matchId').isMongoId().withMessage('Valid match ID required')
+];
+
+const userIdRules = [
+  param('userId').isMongoId().withMessage('Valid user ID required')
+];
+
+// ==================== ROUTES ====================
+
+// Get all matches (with pagination)
 router.get(
-  "/user-matches/:userId",
-  ValidateRequest.validateObjectId,
-  MatchController.getMatches
+  '/',
+  authMiddleware.authenticate, // Fixed reference
+  authMiddleware.checkGenderSet, // Fixed reference
+  ...paginationRules,
+  validateRequest,
+  matchController.getMatches
 );
 
-/**
- * @swagger
- * /api/match/crushes/{userId}:
- *   get:
- *     summary: Get all users who liked the current user (crushes)
- *     tags: [Matches]
- *     parameters:
- *       - in: path
- *         name: userId
- *         required: true
- *         schema:
- *           type: string
- *         description: The user ID
- *     responses:
- *       200:
- *         description: List of crushes
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 crushes:
- *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/User'
- *       400:
- *         description: Invalid user ID format
- *       404:
- *         description: User not found
- *       500:
- *         description: Internal server error
- */
+// Get potential matches (gender-filtered)
 router.get(
-  "/crushes/:userId",
-  ValidateRequest.validateObjectId,
-  MatchController.getCrushes
+  '/potential',
+  authMiddleware.authenticate, // Fixed reference
+  authMiddleware.checkGenderSet, // Fixed reference
+  ...paginationRules,
+  validateRequest,
+  matchController.getPotentialMatches
 );
 
-/**
- * @swagger
- * /api/match/likes:
- *   get:
- *     summary: Get all likes sent by the current user
- *     tags: [Matches]
- *     parameters:
- *       - in: query
- *         name: userId
- *         required: true
- *         schema:
- *           type: string
- *         description: The ID of the current user
- *     responses:
- *       200:
- *         description: List of likes sent by the user
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 likes:
- *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/User'
- *       400:
- *         description: Invalid user ID format
- *       404:
- *         description: User not found
- *       500:
- *         description: Internal server error
- */
+// Create match from mutual like
+router.post(
+  '/like',
+  authMiddleware.authenticate, // Fixed reference
+  authMiddleware.checkGenderSet, // Fixed reference
+  [
+    body('targetUserId')
+      .isMongoId()
+      .withMessage('Valid target user ID required')
+  ],
+  validateRequest,
+  matchController.createMatchIfMutual
+);
+
+// Get details of a specific match
 router.get(
-  "/likes",
-  ValidateRequest.validateQueryObjectId('userId'),
-  MatchController.getUserLikes
+  '/:matchId',
+  authMiddleware.authenticate, // Fixed reference
+  authMiddleware.checkGenderSet, // Fixed reference
+  ...matchIdRules,
+  validateRequest,
+  matchController.getMatchDetails
 );
 
-/**
- * @swagger
- * /api/match/send-like:
- *   post:
- *     summary: Send a like to another user
- *     tags: [Matches]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - currentUserId
- *               - selectedUserId
- *             properties:
- *               currentUserId:
- *                 type: string
- *               selectedUserId:
- *                 type: string
- *     responses:
- *       200:
- *         description: Like sent successfully or match found
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 message:
- *                   type: string
- *                 isMatch:
- *                   type: boolean
- *       400:
- *         description: Invalid input
- *       404:
- *         description: User not found
- *       500:
- *         description: Internal server error
- */
-router.post(
-  "/send-like",
-  ValidateRequest.validateBodyObjectId(['currentUserId', 'selectedUserId']),
-  MatchController.sendLike
+// Unmatch a user
+router.delete(
+  '/:userId',
+  authMiddleware.authenticate, // Fixed reference
+  authMiddleware.checkGenderSet, // Fixed reference
+  ...userIdRules,
+  validateRequest,
+  matchController.unmatchUser
 );
 
-/**
- * @swagger
- * /api/match/create-match:
- *   post:
- *     summary: Create a match between two users
- *     tags: [Matches]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - currentUserId
- *               - selectedUserId
- *             properties:
- *               currentUserId:
- *                 type: string
- *               selectedUserId:
- *                 type: string
- *     responses:
- *       200:
- *         description: Match created successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 message:
- *                   type: string
- *       400:
- *         description: Invalid input
- *       404:
- *         description: User not found
- *       500:
- *         description: Internal server error
- */
-router.post(
-  "/create-match",
-  ValidateRequest.validateBodyObjectId(['currentUserId', 'selectedUserId']),
-  MatchController.createMatch
-);
+// ==================== FALLBACK HANDLERS ====================
+router.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    code: 'MATCH_ENDPOINT_NOT_FOUND',
+    message: 'Match endpoint not found',
+    path: req.path,
+    suggestion: 'Check /api/health for available endpoints',
+    validEndpoints: [
+      'GET    /api/matches',
+      'GET    /api/matches/potential',
+      'POST   /api/matches/like',
+      'GET    /api/matches/:matchId',
+      'DELETE /api/matches/:userId'
+    ]
+  });
+});
 
-/**
- * @swagger
- * /api/match/unmatch:
- *   post:
- *     summary: Unmatch two users
- *     tags: [Matches]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - currentUserId
- *               - selectedUserId
- *             properties:
- *               currentUserId:
- *                 type: string
- *               selectedUserId:
- *                 type: string
- *     responses:
- *       200:
- *         description: Match removed successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 message:
- *                   type: string
- *       400:
- *         description: Invalid input
- *       404:
- *         description: User not found
- *       500:
- *         description: Internal server error
- */
-router.post(
-  "/unmatch",
-  ValidateRequest.validateBodyObjectId(['currentUserId', 'selectedUserId']),
-  MatchController.unmatch
-);
+// Error handler
+router.use((err, req, res, next) => {
+  console.error('[MatchRoutes Error]', err);
+
+  if (err.name === 'ValidationError') {
+    return res.status(400).json({
+      success: false,
+      code: 'MATCH_VALIDATION_FAILED',
+      message: 'Validation failed for match request',
+      errors: err.errors
+    });
+  }
+
+  res.status(500).json({
+    success: false,
+    code: 'MATCH_SYSTEM_ERROR',
+    message: 'Internal server error in match system',
+    error:
+      process.env.NODE_ENV === 'development'
+        ? { message: err.message, stack: err.stack }
+        : undefined
+  });
+});
 
 module.exports = router;
+
+
+
+
+
