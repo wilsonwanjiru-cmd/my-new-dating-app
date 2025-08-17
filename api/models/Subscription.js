@@ -2,88 +2,218 @@ const mongoose = require('mongoose');
 const { Schema } = mongoose;
 
 const subscriptionSchema = new Schema({
+  // Core Subscription Fields
   user: {
     type: Schema.Types.ObjectId,
     ref: 'User',
-    required: true,
-    unique: true
+    required: [true, 'User reference is required'],
+    unique: true,
+    index: true
   },
-  isActive: {
-    type: Boolean,
-    default: false
-  },
-  startsAt: {
-    type: Date,
-    default: Date.now
-  },
-  expiresAt: {
-    type: Date,
-    required: true
-  },
-  mpesaCode: {
+  status: {
     type: String,
-    required: true,
-    trim: true
+    enum: ['active', 'expired', 'pending', 'cancelled'],
+    default: 'pending',
+    index: true
+  },
+  planType: {
+    type: String,
+    default: '24hr_chat',
+    immutable: true
+  },
+
+  // Payment Details (MPesa Specific)
+  mpesaReference: {
+    type: String,
+    required: [true, 'MPesa reference code is required'],
+    trim: true,
+    index: true
   },
   phoneNumber: {
     type: String,
-    required: true,
-    match: [/^\+?254[17]\d{8}$/, 'Please use a valid Mpesa phone number']
+    required: [true, 'Phone number is required'],
+    match: [/^\+?254[17]\d{8}$/, 'Please use a valid Kenyan phone number'],
+    index: true
   },
   amount: {
     type: Number,
     required: true,
     min: [10, 'Minimum subscription amount is KES 10'],
-    default: 10
+    default: 10,
+    set: v => Math.round(v * 100) / 100 // Ensure 2 decimal places
+  },
+
+  // Timing Controls (Critical for 24hr model)
+  activatedAt: {
+    type: Date,
+    default: Date.now
+  },
+  expiresAt: {
+    type: Date,
+    required: [true, 'Expiration date is required'],
+    index: true
+  },
+  lastRenewalAt: Date,
+
+  // Metadata
+  paymentMethod: {
+    type: String,
+    default: 'mpesa',
+    enum: ['mpesa', 'card', 'wallet']
+  },
+  deviceInfo: {
+    ipAddress: String,
+    userAgent: String
   }
 }, {
   timestamps: true,
-  toJSON: { virtuals: true }
+  toJSON: { 
+    virtuals: true,
+    transform: function(doc, ret) {
+      ret.id = ret._id;
+      delete ret._id;
+      delete ret.__v;
+      delete ret.deviceInfo;
+      return ret;
+    }
+  }
 });
 
-// Virtual for checking if subscription is active (not expired)
-subscriptionSchema.virtual('isValid').get(function() {
-  return this.isActive && this.expiresAt > new Date();
+// ======================
+// INDEXES (Optimized for Ruda)
+// ======================
+subscriptionSchema.index({ user: 1, status: 1 });
+subscriptionSchema.index({ expiresAt: 1 });
+subscriptionSchema.index({ mpesaReference: 1 }, { unique: true });
+
+// ======================
+// VIRTUAL PROPERTIES
+// ======================
+subscriptionSchema.virtual('isActive').get(function() {
+  return this.status === 'active' && this.expiresAt > new Date();
 });
 
-// Virtual for hours remaining
 subscriptionSchema.virtual('hoursRemaining').get(function() {
-  if (!this.expiresAt) return 0;
   const diff = this.expiresAt - new Date();
-  return Math.ceil(diff / (1000 * 60 * 60)); // Convert to hours
+  return Math.max(0, Math.ceil(diff / (1000 * 60 * 60)));
 });
 
-// Pre-save hook to set expiration to 24 hours from creation
+subscriptionSchema.virtual('minutesRemaining').get(function() {
+  const diff = this.expiresAt - new Date();
+  return Math.max(0, Math.ceil(diff / (1000 * 60)));
+});
+
+// ======================
+// PRE-SAVE HOOKS
+// ======================
 subscriptionSchema.pre('save', function(next) {
-  if (!this.expiresAt) {
+  // Auto-set expiration to 24 hours if not specified
+  if (!this.expiresAt && this.isNew) {
     const now = new Date();
     this.expiresAt = new Date(now.setHours(now.getHours() + 24));
   }
-  
-  // Automatically set active status
-  this.isActive = this.expiresAt > new Date();
+
+  // Auto-update status based on expiration
+  if (this.expiresAt < new Date() && this.status === 'active') {
+    this.status = 'expired';
+  }
+
   next();
 });
 
-// Static method to create a new Mpesa subscription
-subscriptionSchema.statics.createMpesaSubscription = async function(userId, mpesaData) {
-  const subscription = new this({
+// ======================
+// STATIC METHODS (Ruda-Specific)
+// ======================
+
+/**
+ * Creates a new 24-hour chat subscription
+ */
+subscriptionSchema.statics.createMpesaSubscription = async function(
+  userId, 
+  mpesaData,
+  deviceInfo = {}
+) {
+  // Prevent duplicate subscriptions
+  const existing = await this.findOne({ user: userId, status: 'active' });
+  if (existing && existing.expiresAt > new Date()) {
+    throw new Error('User already has an active subscription');
+  }
+
+  return this.create({
     user: userId,
-    mpesaCode: mpesaData.mpesaCode,
-    phoneNumber: mpesaData.phoneNumber,
-    amount: mpesaData.amount || 10
+    mpesaReference: mpesaData.reference,
+    phoneNumber: mpesaData.phone,
+    amount: mpesaData.amount || 10,
+    status: 'active',
+    deviceInfo: {
+      ipAddress: deviceInfo.ip,
+      userAgent: deviceInfo.userAgent
+    }
   });
-  
-  return await subscription.save();
 };
 
-// Method to check if subscription is active
+/**
+ * Renews an existing subscription for another 24 hours
+ */
+subscriptionSchema.statics.renewSubscription = async function(
+  userId,
+  mpesaData
+) {
+  const subscription = await this.findOne({ user: userId });
+  if (!subscription) {
+    throw new Error('No existing subscription found');
+  }
+
+  subscription.mpesaReference = mpesaData.reference;
+  subscription.phoneNumber = mpesaData.phone;
+  subscription.amount = mpesaData.amount || 10;
+  subscription.status = 'active';
+  subscription.lastRenewalAt = new Date();
+  
+  // Reset expiration to 24 hours from now
+  const now = new Date();
+  subscription.expiresAt = new Date(now.setHours(now.getHours() + 24));
+
+  return subscription.save();
+};
+
+/**
+ * Gets active subscription status for user
+ */
+subscriptionSchema.statics.getUserStatus = async function(userId) {
+  return this.findOne({ 
+    user: userId,
+    status: 'active',
+    expiresAt: { $gt: new Date() }
+  });
+};
+
+// ======================
+// INSTANCE METHODS
+// ======================
+
+/**
+ * Checks if subscription is currently active
+ */
 subscriptionSchema.methods.checkStatus = function() {
+  const isActive = this.status === 'active' && this.expiresAt > new Date();
   return {
-    isActive: this.isActive && this.expiresAt > new Date(),
+    isActive,
+    status: this.status,
+    planType: this.planType,
     expiresAt: this.expiresAt,
-    hoursRemaining: this.hoursRemaining
+    hoursRemaining: this.hoursRemaining,
+    minutesRemaining: this.minutesRemaining
   };
+};
+
+/**
+ * Cancels the subscription (immediate effect)
+ */
+subscriptionSchema.methods.cancel = function() {
+  this.status = 'cancelled';
+  this.expiresAt = new Date(); // Immediate expiration
+  return this.save();
 };
 
 const Subscription = mongoose.model('Subscription', subscriptionSchema);

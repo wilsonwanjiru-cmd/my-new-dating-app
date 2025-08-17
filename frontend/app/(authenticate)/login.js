@@ -16,7 +16,7 @@ import {
 import React, { useState, useEffect } from "react";
 import { MaterialIcons, AntDesign, Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useAuth } from '../_context/AuthContext';
+import { useAuth } from '../../_context/AuthContext';
 
 const Login = () => {
   const [email, setEmail] = useState("");
@@ -27,13 +27,13 @@ const Login = () => {
 
   const { login, user } = useAuth();
   const router = useRouter();
-  const CONNECTION_TIMEOUT = 15000;
 
   useEffect(() => {
     const checkAuth = async () => {
       try {
         if (user) {
-          router.replace("/(tabs)/profile");
+          // Redirect to bio screen if user is already logged in
+          router.replace("/(tabs)/bio");
         }
       } catch (error) {
         console.error("Auth check error:", error);
@@ -59,7 +59,8 @@ const Login = () => {
 
       if (result.success) {
         setConnectionStatus("Login successful");
-        router.replace("/(tabs)/profile");
+        // Redirect directly to bio screen after successful login
+        router.replace("/(tabs)/bio");
       } else {
         handleLoginError(new Error(result.error || "Login failed"));
       }

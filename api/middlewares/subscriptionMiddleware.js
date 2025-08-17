@@ -1,255 +1,323 @@
 const User = require('../models/user');
-const { formatDistanceToNow } = require('date-fns');
+const Subscription = require('../models/Subscription');
 const mongoose = require('mongoose');
+const { formatDistanceToNow } = require('date-fns');
+const { sendPushNotification } = require('../utils/notifications');
 
-// Utility function for safe property access
-const safeAccess = (obj, path, fallback = null) => {
-  return path.split('.').reduce((acc, key) => 
-    (acc && typeof acc === 'object' && key in acc) ? acc[key] : fallback, 
-    obj
-  );
+// ==================== Constants ====================
+const SUBSCRIPTION_PRICE = 10; // KES
+const SUBSCRIPTION_DURATION = 24 * 60 * 60 * 1000; // 24 hours in ms
+const GRACE_PERIOD = 30 * 60 * 1000; // 30 minutes grace period
+
+// ==================== Utility Functions ====================
+const isSubscriptionActive = (subscription) => {
+  if (!subscription) return false;
+  const now = new Date();
+  const expiresAt = new Date(subscription.expiresAt);
+  return subscription.isActive && expiresAt > now;
 };
 
+const formatTimeRemaining = (expiresAt) => {
+  if (!expiresAt) return 'No active subscription';
+  const remaining = new Date(expiresAt) - new Date();
+  return remaining > 0 
+    ? `${Math.ceil(remaining / (60 * 60 * 1000))} hours remaining` 
+    : 'Expired';
+};
+
+// ==================== Core Middlewares ====================
+
 /**
- * Main subscription check middleware with enhanced safety
+ * Validates and attaches subscription status to request
  */
-const checkSubscription = async (req, res, next) => {
+const checkSubscriptionStatus = async (req, res, next) => {
   try {
-    // 1. Validate authentication
-    if (!req.user || !req.user._id) {
+    // 1. Validate user authentication
+    if (!req.user?._id) {
       return res.status(401).json({
         success: false,
-        message: "Authentication required",
-        systemCode: "AUTH_REQUIRED",
-        docs: "https://your-api-docs.com/errors/AUTH_REQUIRED"
+        code: 'AUTH_REQUIRED',
+        message: 'Authentication required'
       });
     }
 
-    // 2. Validate user ID format
-    const userId = String(req.user._id);
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user ID format",
-        systemCode: "INVALID_USER_ID"
-      });
-    }
+    // 2. Get current subscription
+    const subscription = await Subscription.findOne({
+      user: req.user._id,
+      type: 'chat'
+    }).sort({ expiresAt: -1 });
 
-    // 3. Safe database query
-    const user = await User.findById(new mongoose.Types.ObjectId(userId))
-      .select('subscription')
-      .lean();
+    // 3. Check if subscription is active (with grace period)
+    const now = new Date();
+    const isActive = subscription?.isActive && 
+                    new Date(subscription.expiresAt).getTime() + GRACE_PERIOD > now.getTime();
 
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-        systemCode: "USER_NOT_FOUND"
-      });
-    }
-
-    // 4. Process subscription status
-    const subscription = user.subscription || {};
-    const expiresAt = subscription.expiresAt instanceof Date 
-      ? subscription.expiresAt 
-      : null;
-    const isActive = Boolean(subscription.isActive) && 
-      expiresAt && 
-      expiresAt > new Date();
-
-    // 5. Attach to request
+    // 4. Attach to request
     req.subscription = {
       isActive,
-      expiresAt: expiresAt?.toISOString(),
-      timeRemaining: isActive ? formatDistanceToNow(expiresAt) : null,
-      type: String(subscription.type || 'none'),
-      paymentMethod: String(subscription.paymentMethod || 'unknown')
+      type: 'chat',
+      price: SUBSCRIPTION_PRICE,
+      expiresAt: subscription?.expiresAt,
+      timeRemaining: isActive ? formatDistanceToNow(subscription.expiresAt) : null,
+      canRenew: !isActive
     };
 
     next();
   } catch (error) {
-    console.error('[SUBSCRIPTION MIDDLEWARE ERROR]', error);
-
-    // Handle specific error types
-    if (error instanceof mongoose.Error.CastError) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid data format",
-        systemCode: "DATA_FORMAT_INVALID"
-      });
-    }
-
+    console.error('[SUBSCRIPTION] Status check error:', error);
     res.status(500).json({
       success: false,
-      message: "Subscription check failed",
-      systemCode: "SUBSCRIPTION_CHECK_FAILED",
-      debugInfo: process.env.NODE_ENV === 'development' 
-        ? { error: error.message } 
-        : undefined
+      code: 'SUBSCRIPTION_CHECK_FAILED',
+      message: 'Failed to check subscription status'
     });
   }
 };
 
 /**
- * Feature restriction middleware with dynamic messaging
+ * Restricts access to premium features
  */
-const restrictFreeUsers = (feature, options = {}) => {
-  return async (req, res, next) => {
-    try {
-      // 1. Check if subscription check was run
-      if (!req.subscription) {
-        await checkSubscription(req, res, () => {});
-        if (res.headersSent) return;
-      }
-
-      // 2. Check subscription status
-      if (!req.subscription.isActive) {
-        const defaultMessage = `Subscribe to unlock ${feature} features.`;
-        const timeMessage = req.subscription.expiresAt 
-          ? ` Your subscription expired ${formatDistanceToNow(new Date(req.subscription.expiresAt))} ago.`
-          : '';
-        
-        return res.status(403).json({
-          success: false,
-          message: options.customMessage || (defaultMessage + timeMessage),
-          systemCode: "SUBSCRIPTION_REQUIRED",
-          metadata: {
-            feature,
-            required: true,
-            upgradeUrl: "/api/payments/subscribe",
-            currentStatus: {
-              isActive: false,
-              expiresAt: req.subscription.expiresAt,
-              type: req.subscription.type
-            }
-          }
-        });
-      }
-
-      // 3. Additional feature-specific checks
-      if (feature === 'messaging') {
-        const recipientId = req.params.recipientId || req.body.recipientId;
-        if (recipientId) {
-          const recipient = await User.findById(recipientId)
-            .select('subscription')
-            .lean();
-          
-          if (!recipient?.subscription?.isActive) {
-            req.recipientSubscriptionStatus = {
-              needsSubscription: true,
-              recipientId: String(recipientId)
-            };
-          }
-        }
-      }
-
-      next();
-    } catch (error) {
-      console.error('[FEATURE RESTRICTION ERROR]', error);
-      res.status(500).json({
-        success: false,
-        message: "Feature access check failed",
-        systemCode: "FEATURE_CHECK_FAILED"
-      });
-    }
-  };
-};
-
-/**
- * Specialized messaging permission checker
- */
-const checkMessagePermissions = async (req, res, next) => {
+const requireSubscription = (feature = 'this feature') => async (req, res, next) => {
   try {
-    // 1. Validate required fields
-    const { senderId, receiverId } = req.body;
-    if (!senderId || !receiverId) {
-      return res.status(400).json({
-        success: false,
-        message: "Both senderId and receiverId are required",
-        systemCode: "MESSAGE_IDS_REQUIRED"
-      });
-    }
-
-    // 2. Validate ID formats
-    if (!mongoose.Types.ObjectId.isValid(senderId) || 
-        !mongoose.Types.ObjectId.isValid(receiverId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user ID format",
-        systemCode: "INVALID_USER_ID"
-      });
-    }
-
-    // 3. Check subscriptions
-    const [sender, receiver] = await Promise.all([
-      User.findById(new mongoose.Types.ObjectId(senderId))
-        .select('subscription')
-        .lean(),
-      User.findById(new mongoose.Types.ObjectId(receiverId))
-        .select('subscription')
-        .lean()
-    ]);
-
-    // 4. Validate sender subscription
-    const senderSubscription = sender?.subscription || {};
-    const senderIsActive = Boolean(senderSubscription.isActive) && 
-      new Date(senderSubscription.expiresAt) > new Date();
-
-    if (!senderIsActive) {
-      return res.status(403).json({
-        success: false,
-        message: "You need an active subscription to send messages",
-        systemCode: "SENDER_SUBSCRIPTION_REQUIRED",
-        upgradeUrl: "/api/payments/subscribe"
-      });
-    }
-
-    // 5. Check receiver subscription
-    const receiverSubscription = receiver?.subscription || {};
-    const receiverIsActive = Boolean(receiverSubscription.isActive) && 
-      new Date(receiverSubscription.expiresAt) > new Date();
-
-    if (!receiverIsActive) {
-      req.recipientSubscriptionStatus = {
-        needsSubscription: true,
-        receiverId: String(receiverId),
-        expiresAt: receiverSubscription.expiresAt instanceof Date
-          ? receiverSubscription.expiresAt.toISOString()
-          : null
-      };
-    }
-
-    next();
-  } catch (error) {
-    console.error('[MESSAGE PERMISSION ERROR]', error);
-    res.status(500).json({
-      success: false,
-      message: "Message permission check failed",
-      systemCode: "MESSAGE_CHECK_FAILED"
-    });
-  }
-};
-
-/**
- * Subscription status enricher
- */
-const enrichSubscriptionStatus = async (req, res, next) => {
-  try {
-    if (req.user && !req.subscription) {
-      await checkSubscription(req, res, () => {});
+    // 1. Check if subscription status is already loaded
+    if (!req.subscription) {
+      await checkSubscriptionStatus(req, res, () => {});
       if (res.headersSent) return;
     }
+
+    // 2. Validate subscription
+    if (!req.subscription.isActive) {
+      return res.status(403).json({
+        success: false,
+        code: 'SUBSCRIPTION_REQUIRED',
+        message: `Subscribe for KES ${SUBSCRIPTION_PRICE} to access ${feature}`,
+        data: {
+          price: SUBSCRIPTION_PRICE,
+          duration: '24 hours',
+          paymentMethods: ['M-Pesa'],
+          upgradeUrl: '/api/subscribe'
+        }
+      });
+    }
+
+    // 3. Check if subscription is about to expire (<1 hour remaining)
+    const expiresAt = new Date(req.subscription.expiresAt);
+    const timeLeft = expiresAt - new Date();
+    if (timeLeft < 60 * 60 * 1000) { // <1 hour
+      req.subscription.isExpiringSoon = true;
+      req.subscription.timeLeftMs = timeLeft;
+      
+      // Notify user if this is their first request with expiring soon status
+      if (!req.user.notifiedAboutExpiry) {
+        await sendPushNotification(req.user._id, {
+          title: 'Subscription Expiring Soon',
+          body: `Your chat access expires in ${Math.ceil(timeLeft / (60 * 60 * 1000))} hours`
+        });
+        await User.updateOne(
+          { _id: req.user._id }, 
+          { $set: { notifiedAboutExpiry: true } }
+        );
+      }
+    }
+
     next();
   } catch (error) {
-    console.error('[SUBSCRIPTION ENRICH ERROR]', error);
-    next(error);
+    console.error('[SUBSCRIPTION] Access check error:', error);
+    res.status(500).json({
+      success: false,
+      code: 'SUBSCRIPTION_CHECK_FAILED',
+      message: 'Failed to verify subscription access'
+    });
   }
 };
 
+/**
+ * Validates new subscription requests
+ */
+const validateSubscriptionRequest = async (req, res, next) => {
+  try {
+    // 1. Validate user
+    if (!req.user?._id) {
+      return res.status(401).json({
+        success: false,
+        code: 'AUTH_REQUIRED',
+        message: 'Authentication required'
+      });
+    }
+
+    // 2. Check for existing active subscription
+    const activeSub = await Subscription.findOne({
+      user: req.user._id,
+      isActive: true,
+      expiresAt: { $gt: new Date() }
+    });
+
+    if (activeSub) {
+      return res.status(400).json({
+        success: false,
+        code: 'ACTIVE_SUBSCRIPTION_EXISTS',
+        message: 'You already have an active subscription',
+        data: {
+          expiresAt: activeSub.expiresAt,
+          timeRemaining: formatDistanceToNow(activeSub.expiresAt)
+        }
+      });
+    }
+
+    // 3. Validate payment method
+    if (!req.body.phone || !/^[0-9]{10,12}$/.test(req.body.phone)) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_PHONE',
+        message: 'Valid phone number required for M-Pesa payment'
+      });
+    }
+
+    next();
+  } catch (error) {
+    console.error('[SUBSCRIPTION] Validation error:', error);
+    res.status(500).json({
+      success: false,
+      code: 'SUBSCRIPTION_VALIDATION_FAILED',
+      message: 'Failed to validate subscription request'
+    });
+  }
+};
+
+/**
+ * Handles subscription renewal checks
+ */
+const checkRenewalEligibility = async (req, res, next) => {
+  try {
+    // 1. Get latest subscription even if expired
+    const latestSub = await Subscription.findOne({
+      user: req.user._id
+    }).sort({ expiresAt: -1 });
+
+    // 2. Check if user can renew (either no sub or expired)
+    const canRenew = !latestSub || 
+                    new Date(latestSub.expiresAt) < new Date();
+
+    if (!canRenew && latestSub.isActive) {
+      return res.status(400).json({
+        success: false,
+        code: 'ACTIVE_SUBSCRIPTION_EXISTS',
+        message: 'You already have an active subscription',
+        data: {
+          expiresAt: latestSub.expiresAt,
+          timeRemaining: formatDistanceToNow(latestSub.expiresAt)
+        }
+      });
+    }
+
+    req.canRenewSubscription = canRenew;
+    req.latestSubscription = latestSub;
+    next();
+  } catch (error) {
+    console.error('[SUBSCRIPTION] Renewal check error:', error);
+    res.status(500).json({
+      success: false,
+      code: 'RENEWAL_CHECK_FAILED',
+      message: 'Failed to check renewal eligibility'
+    });
+  }
+};
+
+// ==================== Specialized Middlewares ====================
+
+/**
+ * Validates both parties in a chat have active subscriptions
+ */
+const validateChatParticipants = async (req, res, next) => {
+  try {
+    const { senderId, recipientId } = req.body;
+
+    // 1. Validate IDs
+    if (!mongoose.Types.ObjectId.isValid(senderId) || 
+        !mongoose.Types.ObjectId.isValid(recipientId)) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_USER_ID',
+        message: 'Invalid user ID format'
+      });
+    }
+
+    // 2. Check subscriptions for both users
+    const [sender, recipient] = await Promise.all([
+      User.findById(senderId).select('subscription'),
+      User.findById(recipientId).select('subscription')
+    ]);
+
+    // 3. Validate sender subscription
+    if (!isSubscriptionActive(sender?.subscription)) {
+      return res.status(403).json({
+        success: false,
+        code: 'SENDER_SUBSCRIPTION_INACTIVE',
+        message: 'Your chat subscription has expired',
+        data: {
+          price: SUBSCRIPTION_PRICE,
+          upgradeUrl: '/api/subscribe'
+        }
+      });
+    }
+
+    // 4. Validate recipient subscription (with different message)
+    if (!isSubscriptionActive(recipient?.subscription)) {
+      req.recipientHasInactiveSubscription = true;
+    }
+
+    next();
+  } catch (error) {
+    console.error('[SUBSCRIPTION] Chat validation error:', error);
+    res.status(500).json({
+      success: false,
+      code: 'CHAT_VALIDATION_FAILED',
+      message: 'Failed to validate chat participants'
+    });
+  }
+};
+
+/**
+ * Tracks subscription usage and remaining time
+ */
+const trackSubscriptionUsage = async (req, res, next) => {
+  if (!req.subscription?.isActive) return next();
+
+  try {
+    const now = new Date();
+    const expiresAt = new Date(req.subscription.expiresAt);
+    const timeLeft = expiresAt - now;
+
+    // Add headers for client-side tracking
+    res.set({
+      'X-Subscription-Expires': expiresAt.toISOString(),
+      'X-Subscription-Remaining': Math.floor(timeLeft / 1000) // seconds
+    });
+
+    // Log usage for analytics
+    if (req.method !== 'GET') {
+      await Subscription.updateOne(
+        { user: req.user._id, expiresAt },
+        { $inc: { usageCount: 1 }, $set: { lastUsedAt: now } }
+      );
+    }
+
+    next();
+  } catch (error) {
+    console.error('[SUBSCRIPTION] Tracking error:', error);
+    next(); // Don't block request for tracking failures
+  }
+};
+
+// ==================== Exports ====================
 module.exports = {
-  checkSubscription,
-  restrictFreeUsers,
-  checkMessagePermissions,
-  enrichSubscriptionStatus,
-  verifySubscription: checkSubscription // Legacy alias
+  checkSubscriptionStatus,
+  requireSubscription,
+  validateSubscriptionRequest,
+  checkRenewalEligibility,
+  validateChatParticipants,
+  trackSubscriptionUsage,
+  
+  // Legacy/compatibility exports
+  checkSubscription: checkSubscriptionStatus,
+  restrictFreeUsers: requireSubscription
 };

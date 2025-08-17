@@ -1,98 +1,121 @@
 const Message = require('../models/Chat');
 const User = require('../models/user');
+const Photo = require('../models/photo');
 const mongoose = require('mongoose');
 const { formatDistanceToNow } = require('date-fns');
 
-// Centralized error handler
+// Enhanced error handler
 const handleError = (error, res) => {
   console.error('Chat Controller Error:', error);
   
   if (error instanceof mongoose.Error.ValidationError) {
     return res.status(400).json({ 
       success: false, 
-      message: error.message 
+      message: error.message,
+      code: 'VALIDATION_ERROR'
     });
   }
 
   if (error instanceof mongoose.Error.CastError) {
     return res.status(400).json({ 
       success: false, 
-      message: 'Invalid ID format' 
+      message: 'Invalid ID format',
+      code: 'INVALID_ID'
     });
   }
 
   return res.status(500).json({ 
     success: false, 
     message: 'Internal server error',
+    code: 'SERVER_ERROR',
     error: process.env.NODE_ENV === 'development' ? error : undefined
   });
 };
 
-// Get all messages between current user and others
-exports.getMessages = async (req, res) => {
+// Format chat response
+const formatChatResponse = async (message, currentUser, showAllPhotos = true) => {
+  const populated = await Message.populate(message, [
+    { path: 'sender', select: 'name profileImages subscription' },
+    { path: 'recipient', select: 'name profileImages subscription' }
+  ]);
+
+  return {
+    _id: populated._id,
+    threadId: populated.threadId || populated._id,
+    sender: {
+      _id: populated.sender._id,
+      name: populated.sender.name,
+      profileImages: showAllPhotos 
+        ? populated.sender.profileImages 
+        : [populated.sender.profileImages[0]],
+      isSubscribed: populated.sender.subscription?.isActive
+    },
+    recipient: {
+      _id: populated.recipient._id,
+      name: populated.recipient.name,
+      profileImages: showAllPhotos 
+        ? populated.recipient.profileImages 
+        : [populated.recipient.profileImages[0]],
+      isSubscribed: populated.recipient.subscription?.isActive
+    },
+    content: populated.content,
+    photoContext: populated.photoContext,
+    isRead: populated.isRead,
+    createdAt: populated.createdAt,
+    updatedAt: populated.updatedAt,
+    canReply: currentUser.subscription?.isActive
+  };
+};
+
+// Controller Methods
+const getMessages = async (req, res) => {
   try {
     const { recipientId } = req.query;
-    const currentUserId = req.user._id;
+    const currentUser = req.user;
 
-    // If recipientId is provided, get conversation between two users
     if (recipientId) {
-      if (!mongoose.Types.ObjectId.isValid(recipientId)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid recipient ID'
-        });
-      }
-
-      // Check if recipient exists
-      const recipient = await User.findById(recipientId);
-      if (!recipient) {
-        return res.status(404).json({
-          success: false,
-          message: 'Recipient not found'
-        });
-      }
-
+      // Get conversation with specific recipient
       const messages = await Message.find({
         $or: [
-          { sender: currentUserId, recipient: recipientId },
-          { sender: recipientId, recipient: currentUserId }
-        ]
+          { sender: currentUser._id, recipient: recipientId },
+          { sender: recipientId, recipient: currentUser._id }
+        ],
+        deletedBy: { $ne: currentUser._id }
       })
-      .sort({ createdAt: -1 })
+      .sort({ createdAt: 1 })
       .populate('sender', 'name profileImages')
       .populate('recipient', 'name profileImages');
 
-      // Mark messages as read if they're being viewed by recipient
+      // Mark as read if recipient
       await Message.updateMany(
         {
-          recipient: currentUserId,
-          sender: recipientId,
-          isRead: false
+          recipient: currentUser._id,
+          isRead: false,
+          _id: { $in: messages.map(m => m._id) }
         },
         { $set: { isRead: true } }
       );
 
+      // Fixed: Properly handle async operation
+      const formattedMessages = await Promise.all(
+        messages.map(m => formatChatResponse(m, currentUser, true))
+      );
+
       return res.status(200).json({
         success: true,
-        data: messages,
-        recipientInfo: {
-          name: recipient.name,
-          profileImages: req.user.hasActiveSubscription 
-            ? recipient.profileImages 
-            : recipient.profileImages.slice(0, 7),
-          canMessage: recipient.subscription?.isActive
-        }
+        messages: formattedMessages
       });
     }
 
-    // If no recipientId, get all recent conversations
+    // Get all conversations
     const conversations = await Message.aggregate([
       {
         $match: {
           $or: [
-            { sender: currentUserId },
-            { recipient: currentUserId }
-          ]
+            { sender: currentUser._id },
+            { recipient: currentUser._id }
+          ],
+          deletedBy: { $ne: currentUser._id }
         }
       },
       {
@@ -102,7 +125,7 @@ exports.getMessages = async (req, res) => {
         $group: {
           _id: {
             $cond: [
-              { $eq: ["$sender", currentUserId] },
+              { $eq: ["$sender", currentUser._id] },
               "$recipient",
               "$sender"
             ]
@@ -113,7 +136,7 @@ exports.getMessages = async (req, res) => {
               $cond: [
                 {
                   $and: [
-                    { $eq: ["$recipient", currentUserId] },
+                    { $eq: ["$recipient", currentUser._id] },
                     { $eq: ["$isRead", false] }
                   ]
                 },
@@ -129,7 +152,17 @@ exports.getMessages = async (req, res) => {
           from: "users",
           localField: "_id",
           foreignField: "_id",
-          as: "user"
+          as: "user",
+          pipeline: [
+            {
+              $project: {
+                name: 1,
+                profileImages: 1,
+                subscription: 1,
+                lastActive: 1
+              }
+            }
+          ]
         }
       },
       {
@@ -137,37 +170,32 @@ exports.getMessages = async (req, res) => {
       },
       {
         $project: {
-          userId: "$_id",
-          _id: 0,
-          lastMessage: 1,
+          _id: "$lastMessage._id",
+          threadId: "$lastMessage.threadId",
+          lastMessage: {
+            content: "$lastMessage.content",
+            createdAt: "$lastMessage.createdAt",
+            isRead: "$lastMessage.isRead",
+            photoContext: "$lastMessage.photoContext"
+          },
           unreadCount: 1,
           user: {
-            name: 1,
-            profileImages: 1,
-            subscription: 1,
-            lastActive: 1
+            _id: "$_id",
+            name: "$user.name",
+            profileImages: "$user.profileImages",
+            subscription: "$user.subscription",
+            lastActive: "$user.lastActive"
           }
         }
       }
     ]);
 
-    // Process profile images based on subscription
-    const processedConversations = conversations.map(conv => {
-      const canViewAll = req.user.hasActiveSubscription;
-      return {
-        ...conv,
-        user: {
-          ...conv.user,
-          profileImages: canViewAll 
-            ? conv.user.profileImages 
-            : conv.user.profileImages.slice(0, 7)
-        }
-      };
-    });
-
     res.status(200).json({
       success: true,
-      data: processedConversations
+      conversations: conversations.map(conv => ({
+        ...conv,
+        canReply: currentUser.subscription?.isActive
+      }))
     });
 
   } catch (error) {
@@ -175,82 +203,69 @@ exports.getMessages = async (req, res) => {
   }
 };
 
-// Send a new message
-exports.sendMessage = async (req, res) => {
+const sendMessage = async (req, res) => {
   try {
     const { recipientId, content } = req.body;
-    const senderId = req.user._id;
+    const currentUser = req.user;
 
-    // Validate input
-    if (!mongoose.Types.ObjectId.isValid(recipientId)) {
-      return res.status(400).json({
+    // ===== START: STRICT SUBSCRIPTION CHECK =====
+    if (!currentUser.isSubscribed) {
+      return res.status(403).json({
         success: false,
-        message: 'Invalid recipient ID'
+        code: 'SUBSCRIPTION_REQUIRED',
+        message: 'Subscribe to send messages (KES 10/24hr)',
+        upgradeUrl: '/api/subscribe'
       });
     }
+    // ===== END: STRICT SUBSCRIPTION CHECK =====
 
     if (!content || content.trim() === '') {
       return res.status(400).json({
         success: false,
-        message: 'Message content is required'
+        message: 'Message content is required',
+        code: 'EMPTY_CONTENT'
       });
     }
 
-    // Check if recipient exists
+    // Validate recipient exists
     const recipient = await User.findById(recipientId);
     if (!recipient) {
       return res.status(404).json({
         success: false,
-        message: 'Recipient not found'
+        message: 'Recipient not found',
+        code: 'USER_NOT_FOUND'
       });
     }
 
-    // Check subscription status for sender
-    if (!req.user.hasActiveSubscription) {
-      return res.status(403).json({
-        success: false,
-        message: 'Please subscribe for KES 10 to send messages',
-        upgradeRequired: true
-      });
-    }
+    // Check for existing conversation thread
+    const existingThread = await Message.findOne({
+      $or: [
+        { sender: currentUser._id, recipient: recipientId },
+        { sender: recipientId, recipient: currentUser._id }
+      ]
+    }).sort({ createdAt: -1 });
 
-    // Create the message
+    const threadId = existingThread?._id || null;
+
+    // Create new message
     const message = await Message.create({
-      sender: senderId,
+      sender: currentUser._id,
       recipient: recipientId,
       content: content.trim(),
-      requiresSubscription: !recipient.subscription?.isActive
+      threadId: threadId,
+      isRead: false
     });
 
-    // Populate sender/recipient info
-    const populatedMessage = await Message.populate(message, [
-      { path: 'sender', select: 'name profileImages' },
-      { path: 'recipient', select: 'name profileImages' }
-    ]);
-
-    // Notify recipient if they haven't paid
-    if (!recipient.subscription?.isActive) {
-      await User.findByIdAndUpdate(recipientId, {
-        $push: { 
-          notifications: {
-            type: 'new_message',
-            from: senderId,
-            message: `${req.user.name} sent you a message`,
-            data: { 
-              messageId: message._id,
-              requiresSubscription: true
-            },
-            createdAt: new Date()
-          }
-        },
-        $set: { lastActive: new Date() }
-      });
+    // Update thread timestamp if this is a reply
+    if (threadId) {
+      await Message.findByIdAndUpdate(threadId, { updatedAt: new Date() });
     }
+
+    const formattedMessage = await formatChatResponse(message, currentUser, true);
 
     res.status(201).json({
       success: true,
-      message: populatedMessage,
-      recipientCanReply: recipient.subscription?.isActive || false
+      message: formattedMessage
     });
 
   } catch (error) {
@@ -258,43 +273,162 @@ exports.sendMessage = async (req, res) => {
   }
 };
 
-// Delete a specific message
-exports.deleteMessage = async (req, res) => {
+const initiateFromPhoto = async (req, res) => {
   try {
-    const { messageId } = req.params;
-    const userId = req.user._id;
+    const { photoId, targetUserId } = req.body;
+    const currentUser = req.user;
 
-    if (!mongoose.Types.ObjectId.isValid(messageId)) {
-      return res.status(400).json({
+    // ===== START: STRICT SUBSCRIPTION CHECK =====
+    if (!currentUser.isSubscribed) {
+      return res.status(403).json({
         success: false,
-        message: 'Invalid message ID'
+        code: 'SUBSCRIPTION_REQUIRED',
+        message: 'Subscribe to initiate chats (KES 10/24hr)',
+        upgradeUrl: '/api/subscribe'
+      });
+    }
+    // ===== END: STRICT SUBSCRIPTION CHECK =====
+
+    // Validate photo exists
+    const photo = await Photo.findById(photoId)
+      .populate('user', 'name gender subscription profileImages');
+    
+    if (!photo) {
+      return res.status(404).json({
+        success: false,
+        message: 'Photo not found',
+        code: 'PHOTO_NOT_FOUND'
       });
     }
 
-    const message = await Message.findOne({
-      _id: messageId,
+    // Validate target user exists
+    const targetUser = await User.findById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+        code: 'USER_NOT_FOUND'
+      });
+    }
+
+    // Prevent self-chatting
+    if (targetUserId === currentUser._id.toString()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot chat with yourself',
+        code: 'SELF_CHAT'
+      });
+    }
+
+    // Check for existing conversation
+    const existingChat = await Message.findOne({
       $or: [
-        { sender: userId },
-        { recipient: userId }
+        { sender: currentUser._id, recipient: targetUserId },
+        { sender: targetUserId, recipient: currentUser._id }
       ]
+    }).sort({ createdAt: -1 });
+
+    if (existingChat) {
+      const formattedChat = await formatChatResponse(existingChat, currentUser, true);
+      return res.status(200).json({
+        success: true,
+        message: 'Existing conversation found',
+        chat: formattedChat
+      });
+    }
+
+    // Create new conversation
+    const newMessage = await Message.create({
+      sender: currentUser._id,
+      recipient: targetUserId,
+      content: `Hi! I saw your photo and wanted to connect.`,
+      photoContext: photoId,
+      isRead: false
     });
+
+    // Notify recipient
+    await User.findByIdAndUpdate(targetUserId, {
+      $push: {
+        notifications: {
+          type: 'new_chat',
+          from: currentUser._id,
+          message: `${currentUser.name} started a chat about your photo`,
+          data: {
+            messageId: newMessage._id,
+            photoId: photoId
+          },
+          createdAt: new Date()
+        }
+      }
+    });
+
+    const formattedNewMessage = await formatChatResponse(newMessage, currentUser, true);
+
+    res.status(201).json({
+      success: true,
+      message: 'Conversation started',
+      chat: formattedNewMessage
+    });
+
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+const getUnreadMessages = async (req, res) => {
+  try {
+    const currentUser = req.user;
+    const unread = await Message.find({
+      recipient: currentUser._id,
+      isRead: false,
+      deletedBy: { $ne: currentUser._id }
+    })
+    .populate('sender', 'name profileImages subscription');
+
+    const formattedMessages = await Promise.all(
+      unread.map(m => formatChatResponse(m, currentUser, true))
+    );
+
+    res.status(200).json({
+      success: true,
+      count: unread.length,
+      messages: formattedMessages
+    });
+
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+const markMessageAsRead = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const currentUser = req.user;
+
+    const message = await Message.findOneAndUpdate(
+      {
+        _id: messageId,
+        recipient: currentUser._id,
+        isRead: false
+      },
+      { isRead: true },
+      { new: true }
+    );
 
     if (!message) {
       return res.status(404).json({
         success: false,
-        message: 'Message not found or unauthorized'
+        message: 'Message not found or already read',
+        code: 'MESSAGE_NOT_FOUND'
       });
     }
 
-    // Soft delete by adding user to deletedBy array
-    if (!message.deletedBy.includes(userId)) {
-      message.deletedBy.push(userId);
-      await message.save();
-    }
+    const formattedMessage = await formatChatResponse(message, currentUser, true);
 
     res.status(200).json({
       success: true,
-      message: 'Message deleted successfully'
+      message: 'Message marked as read',
+      updatedMessage: formattedMessage
     });
 
   } catch (error) {
@@ -302,53 +436,48 @@ exports.deleteMessage = async (req, res) => {
   }
 };
 
-// Update a message
-exports.updateMessage = async (req, res) => {
+const updateMessage = async (req, res) => {
   try {
     const { messageId } = req.params;
     const { content } = req.body;
-    const userId = req.user._id;
+    const currentUser = req.user;
 
-    if (!mongoose.Types.ObjectId.isValid(messageId)) {
-      return res.status(400).json({
+    // ===== START: STRICT SUBSCRIPTION CHECK =====
+    if (!currentUser.isSubscribed) {
+      return res.status(403).json({
         success: false,
-        message: 'Invalid message ID'
+        code: 'SUBSCRIPTION_REQUIRED',
+        message: 'Subscribe to edit messages (KES 10/24hr)',
+        upgradeUrl: '/api/subscribe'
       });
     }
+    // ===== END: STRICT SUBSCRIPTION CHECK =====
 
-    if (!content || content.trim() === '') {
-      return res.status(400).json({
-        success: false,
-        message: 'Message content is required'
-      });
-    }
-
-    const message = await Message.findOneAndUpdate(
-      {
-        _id: messageId,
-        sender: userId,
-        createdAt: { $gt: new Date(Date.now() - 5 * 60 * 1000) } // Only allow edits within 5 minutes
-      },
-      { 
-        content: content.trim(),
-        edited: true 
-      },
-      { new: true }
-    );
+    // Check if message can be edited (within 5 minutes)
+    const message = await Message.findOne({
+      _id: messageId,
+      sender: currentUser._id,
+      createdAt: { $gt: new Date(Date.now() - 5 * 60 * 1000) },
+      deletedBy: { $ne: currentUser._id }
+    });
 
     if (!message) {
-      return res.status(404).json({
+      return res.status(400).json({
         success: false,
-        message: 'Message not found, unauthorized, or edit window expired'
+        message: 'Message cannot be edited (either not found, edit window expired, or deleted)',
+        code: 'EDIT_FAILED'
       });
     }
+
+    message.content = content;
+    message.updatedAt = new Date();
+    await message.save();
+
+    const formattedMessage = await formatChatResponse(message, currentUser, true);
 
     res.status(200).json({
       success: true,
-      message: await Message.populate(message, [
-        { path: 'sender', select: 'name profileImages' },
-        { path: 'recipient', select: 'name profileImages' }
-      ])
+      message: formattedMessage
     });
 
   } catch (error) {
@@ -356,39 +485,34 @@ exports.updateMessage = async (req, res) => {
   }
 };
 
-// Mark message as read
-exports.markMessageAsRead = async (req, res) => {
+const deleteMessage = async (req, res) => {
   try {
     const { messageId } = req.params;
-    const userId = req.user._id;
+    const currentUser = req.user;
 
-    if (!mongoose.Types.ObjectId.isValid(messageId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid message ID'
-      });
-    }
-
-    const message = await Message.findOneAndUpdate(
+    const result = await Message.updateOne(
       {
         _id: messageId,
-        recipient: userId,
-        isRead: false
+        $or: [
+          { sender: currentUser._id },
+          { recipient: currentUser._id }
+        ],
+        deletedBy: { $ne: currentUser._id }
       },
-      { $set: { isRead: true } },
-      { new: true }
+      { $addToSet: { deletedBy: currentUser._id } }
     );
 
-    if (!message) {
+    if (result.modifiedCount === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Message not found or already read'
+        message: 'Message not found or already deleted',
+        code: 'DELETE_FAILED'
       });
     }
 
     res.status(200).json({
       success: true,
-      message: 'Message marked as read'
+      message: 'Message deleted'
     });
 
   } catch (error) {
@@ -396,62 +520,40 @@ exports.markMessageAsRead = async (req, res) => {
   }
 };
 
-// Get unread messages
-exports.getUnreadMessages = async (req, res) => {
-  try {
-    const userId = req.user._id;
-
-    const messages = await Message.find({
-      recipient: userId,
-      isRead: false
-    })
-    .sort({ createdAt: -1 })
-    .populate('sender', 'name profileImages');
-
-    res.status(200).json({
-      success: true,
-      count: messages.length,
-      messages
-    });
-
-  } catch (error) {
-    handleError(error, res);
-  }
-};
-
-// Delete chat history with a user
-exports.deleteChatHistory = async (req, res) => {
+const deleteChatHistory = async (req, res) => {
   try {
     const { userId } = req.query;
-    const currentUserId = req.user._id;
+    const currentUser = req.user;
 
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid user ID'
-      });
-    }
-
-    // Mark all messages as deleted by current user
-    await Message.updateMany(
+    const result = await Message.updateMany(
       {
         $or: [
-          { sender: currentUserId, recipient: userId },
-          { sender: userId, recipient: currentUserId }
+          { sender: currentUser._id, recipient: userId },
+          { sender: userId, recipient: currentUser._id }
         ],
-        deletedBy: { $ne: currentUserId }
+        deletedBy: { $ne: currentUser._id }
       },
-      {
-        $push: { deletedBy: currentUserId }
-      }
+      { $addToSet: { deletedBy: currentUser._id } }
     );
 
     res.status(200).json({
       success: true,
-      message: 'Chat history deleted successfully'
+      message: 'Conversation deleted',
+      deletedCount: result.modifiedCount
     });
 
   } catch (error) {
     handleError(error, res);
   }
+};
+
+module.exports = {
+  getMessages,
+  sendMessage,
+  initiateFromPhoto,
+  getUnreadMessages,
+  markMessageAsRead,
+  updateMessage,
+  deleteMessage,
+  deleteChatHistory
 };

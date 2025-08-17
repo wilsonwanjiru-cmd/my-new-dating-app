@@ -3,10 +3,6 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 import { API_BASE_URL, API_ENDPOINTS, AUTH_CONFIG } from "../_config";
 
-// Constants for free tier limits
-const FREE_PHOTO_LIMIT = 7;
-const FREE_PHOTO_RESET_HOURS = 24;
-
 // Create context
 const AuthContext = createContext();
 
@@ -16,49 +12,31 @@ export const AuthProvider = ({ children }) => {
     token: null,
     isLoading: true,
     error: null,
-    freePhotosViewed: 0,
-    lastPhotoViewDate: null,
-    freePhotosLimit: FREE_PHOTO_LIMIT
+    isSubscribed: false,
+    subscriptionExpiresAt: null
   });
-
-  // Check if photo views should reset (24h passed)
-  const shouldResetPhotoViews = useCallback((lastDate) => {
-    if (!lastDate) return true;
-    const lastView = new Date(lastDate);
-    const now = new Date();
-    const hoursDiff = (now - lastView) / (1000 * 60 * 60);
-    return hoursDiff >= FREE_PHOTO_RESET_HOURS;
-  }, []);
 
   // Initialize auth state
   const initializeAuth = useCallback(async () => {
     try {
-      const [token, user, lastViewDate, viewedCount] = await Promise.all([
+      const [token, user, subscriptionData] = await Promise.all([
         AsyncStorage.getItem(AUTH_CONFIG.TOKEN_KEY),
         AsyncStorage.getItem(AUTH_CONFIG.PERSIST_USER_KEY),
-        AsyncStorage.getItem('lastPhotoViewDate'),
-        AsyncStorage.getItem('freePhotosViewed')
+        AsyncStorage.getItem('subscriptionData')
       ]);
 
-      const shouldReset = shouldResetPhotoViews(lastViewDate);
-      const initialCount = shouldReset ? 0 : (parseInt(viewedCount) || 0);
+      const parsedSubscription = subscriptionData ? JSON.parse(subscriptionData) : null;
+      const isSubscribed = parsedSubscription?.isSubscribed || false;
+      const subscriptionExpiresAt = parsedSubscription?.expiresAt || null;
 
       setState({
         user: user ? JSON.parse(user) : null,
         token,
         isLoading: false,
         error: null,
-        freePhotosViewed: initialCount,
-        lastPhotoViewDate: shouldReset ? null : lastViewDate,
-        freePhotosLimit: FREE_PHOTO_LIMIT
+        isSubscribed,
+        subscriptionExpiresAt
       });
-
-      if (shouldReset) {
-        await AsyncStorage.multiSet([
-          ['freePhotosViewed', '0'],
-          ['lastPhotoViewDate', new Date().toISOString()]
-        ]);
-      }
     } catch (error) {
       console.error('Auth initialization error:', error);
       setState(prev => ({ 
@@ -67,22 +45,7 @@ export const AuthProvider = ({ children }) => {
         error: error.message 
       }));
     }
-  }, [shouldResetPhotoViews]);
-
-  // Track photo view
-  const incrementPhotoView = useCallback(async () => {
-    const newCount = state.freePhotosViewed + 1;
-    setState(prev => ({
-      ...prev,
-      freePhotosViewed: newCount
-    }));
-    await AsyncStorage.setItem('freePhotosViewed', newCount.toString());
-  }, [state.freePhotosViewed]);
-
-  // Check if can view more photos
-  const canViewMorePhotos = useCallback(() => {
-    return state.freePhotosViewed < FREE_PHOTO_LIMIT;
-  }, [state.freePhotosViewed]);
+  }, []);
 
   // ✅ Login function with userId saved to AsyncStorage
   const login = useCallback(async (credentials) => {
@@ -97,14 +60,16 @@ export const AuthProvider = ({ children }) => {
         }
       );
 
-      const { user, token } = response.data;
+      const { user, token, isSubscribed, subscriptionExpiresAt } = response.data;
 
       await Promise.all([
         AsyncStorage.setItem(AUTH_CONFIG.PERSIST_USER_KEY, JSON.stringify(user)),
         AsyncStorage.setItem(AUTH_CONFIG.TOKEN_KEY, token),
-        AsyncStorage.setItem('lastPhotoViewDate', new Date().toISOString()),
-        AsyncStorage.setItem('freePhotosViewed', '0'),
-        AsyncStorage.setItem('userId', user.id || user._id || '') // ✅ THIS LINE: Save userId explicitly
+        AsyncStorage.setItem('subscriptionData', JSON.stringify({
+          isSubscribed,
+          expiresAt: subscriptionExpiresAt
+        })),
+        AsyncStorage.setItem('userId', user.id || user._id || '')
       ]);
 
       setState({
@@ -112,9 +77,8 @@ export const AuthProvider = ({ children }) => {
         token,
         isLoading: false,
         error: null,
-        freePhotosViewed: 0,
-        lastPhotoViewDate: new Date().toISOString(),
-        freePhotosLimit: FREE_PHOTO_LIMIT
+        isSubscribed,
+        subscriptionExpiresAt
       });
 
       return { success: true, user };
@@ -142,7 +106,8 @@ export const AuthProvider = ({ children }) => {
       await Promise.all([
         AsyncStorage.removeItem(AUTH_CONFIG.PERSIST_USER_KEY),
         AsyncStorage.removeItem(AUTH_CONFIG.TOKEN_KEY),
-        AsyncStorage.removeItem('userId')
+        AsyncStorage.removeItem('userId'),
+        AsyncStorage.removeItem('subscriptionData')
       ]);
 
       setState({
@@ -150,15 +115,82 @@ export const AuthProvider = ({ children }) => {
         token: null,
         isLoading: false,
         error: null,
-        freePhotosViewed: 0,
-        lastPhotoViewDate: null,
-        freePhotosLimit: FREE_PHOTO_LIMIT
+        isSubscribed: false,
+        subscriptionExpiresAt: null
       });
     } catch (error) {
       console.error('Logout error:', error);
       setState(prev => ({ ...prev, error: error.message }));
     }
   }, []);
+
+  // Update user data
+  const updateUser = useCallback(async (updatedUser) => {
+    try {
+      await AsyncStorage.setItem(
+        AUTH_CONFIG.PERSIST_USER_KEY, 
+        JSON.stringify(updatedUser)
+      );
+      
+      setState(prev => ({
+        ...prev,
+        user: updatedUser
+      }));
+    } catch (error) {
+      console.error('Update user error:', error);
+      throw error;
+    }
+  }, []);
+
+  // Like photo function
+  const likePhoto = useCallback(async (photoId) => {
+    try {
+      const response = await axios.patch(
+        `${API_BASE_URL}${API_ENDPOINTS.USERS.LIKE_PHOTO}/${photoId}`,
+        {},
+        {
+          headers: {
+            Authorization: `Bearer ${state.token}`
+          }
+        }
+      );
+
+      const updatedUser = response.data.user;
+      await updateUser(updatedUser);
+      
+      return { success: true };
+    } catch (error) {
+      console.error('Like photo error:', error);
+      return { success: false, error: error.message };
+    }
+  }, [state.token, updateUser]);
+
+  // Start chat function
+  const startChat = useCallback(async (userId) => {
+    if (!state.isSubscribed) {
+      return { success: false, error: 'Please subscribe to start chatting' };
+    }
+
+    try {
+      const response = await axios.post(
+        `${API_BASE_URL}${API_ENDPOINTS.CHAT.START}`,
+        { recipientId: userId },
+        {
+          headers: {
+            Authorization: `Bearer ${state.token}`
+          }
+        }
+      );
+
+      return { 
+        success: true, 
+        chatId: response.data.chatId 
+      };
+    } catch (error) {
+      console.error('Start chat error:', error);
+      return { success: false, error: error.message };
+    }
+  }, [state.isSubscribed, state.token]);
 
   // Initialize on mount
   useEffect(() => {
@@ -170,10 +202,10 @@ export const AuthProvider = ({ children }) => {
     ...state,
     login,
     logout,
-    incrementPhotoView,
-    canViewMorePhotos,
-    getAuthToken: () => state.token,
-    getRemainingPhotoViews: () => FREE_PHOTO_LIMIT - state.freePhotosViewed
+    updateUser,
+    likePhoto,
+    startChat,
+    getAuthToken: () => state.token
   };
 
   return (

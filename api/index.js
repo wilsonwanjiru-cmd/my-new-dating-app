@@ -1,262 +1,310 @@
-require('dotenv').config();
+require('dotenv').config({ path: __dirname + '/.env' });
 const express = require('express');
 const mongoose = require('mongoose');
-const cors = require('cors');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
 const http = require('http');
-const path = require('path');
-const fs = require('fs');
 const morgan = require('morgan');
 const { Server } = require('socket.io');
-const { format } = require('date-fns');
-const jwt = require('jsonwebtoken'); // ✅ Added for token testing
+const cors = require('cors');
+const path = require('path');
+const fs = require('fs');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const compression = require('compression');
+const hpp = require('hpp');
+const mongoSanitize = require('express-mongo-sanitize');
+const xss = require('xss-clean');
+const cloudinary = require('cloudinary').v2;
+const cluster = require('cluster');
+const os = require('os');
+
 const app = express();
 const server = http.createServer(app);
 
-// ==================== Config ====================
-const IS_PRODUCTION = process.env.NODE_ENV === 'production';
-const PORT = parseInt(process.env.PORT) || 5000;
+const PORT = process.env.PORT || 5000;
 const HOST = process.env.HOST || '0.0.0.0';
+const isProduction = process.env.NODE_ENV === 'production';
+const debugRoutes = process.env.DEBUG_ROUTES === 'true';
 const API_BASE_URL = process.env.API_BASE_URL || `http://${HOST}:${PORT}`;
+const numCPUs = os.cpus().length;
 
-if (!process.env.MONGODB_URI) {
-  console.error('❌ MONGODB_URI is missing in environment variables');
-  if (IS_PRODUCTION) process.exit(1);
+// ==================== CLUSTER MODE (PRODUCTION ONLY) ====================
+if (isProduction && cluster.isPrimary) {
+  console.log(`📦 Production mode: Launching ${numCPUs} workers`);
+  for (let i = 0; i < numCPUs; i++) cluster.fork();
+  cluster.on('exit', (worker, code, signal) => {
+    console.error(`❌ Worker ${worker.process.pid} died (${signal || code}) — restarting`);
+    cluster.fork();
+  });
+  return; // only workers run below
 }
 
-// ==================== Initialize Socket.IO ====================
-const io = new Server(server, {
-  cors: {
-    origin: IS_PRODUCTION
-      ? process.env.CORS_ALLOWED_ORIGINS?.split(',') || []
-      : '*',
-    methods: ['GET', 'POST']
-  },
-  pingTimeout: 60000
-});
-require('./sockets/notificationSocket')(io);
+// ==================== ENV VAR VALIDATION ====================
+const requiredEnvVars = [
+  'MONGODB_URI',
+  'JWT_SECRET',
+  'CLOUDINARY_CLOUD_NAME',
+  'CLOUDINARY_API_KEY',
+  'CLOUDINARY_API_SECRET'
+];
+const missingVars = requiredEnvVars.filter(v => !process.env[v]);
+if (missingVars.length) {
+  console.error(`❌ Critical environment variables missing: ${missingVars.join(', ')}`);
+  process.exit(1);
+}
 
-// ==================== Error Handlers ====================
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-});
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
-  if (!IS_PRODUCTION) process.exit(1);
-});
-
-// ==================== Middleware ====================
+// ==================== SECURITY MIDDLEWARE ====================
 app.use(helmet({
-  contentSecurityPolicy: false,
-  hsts: IS_PRODUCTION,
-  crossOriginResourcePolicy: { policy: "same-site" }
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", 'https://apis.google.com'],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+      imgSrc: ["'self'", 'data:', 'blob:', 'https://res.cloudinary.com'],
+      connectSrc: [
+        "'self'",
+        API_BASE_URL,
+        'https://api.safaricom.co.ke',
+        'https://res.cloudinary.com',
+        'ws://localhost:3000'
+      ],
+      frameSrc: ["'self'", 'https://www.google.com'],
+      objectSrc: ["'none'"]
+    }
+  },
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginEmbedderPolicy: false
 }));
 
-const corsOptions = {
-  origin: IS_PRODUCTION
-    ? process.env.CORS_ALLOWED_ORIGINS?.split(',') || []
-    : '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+app.use(cors({
+  origin: isProduction
+    ? [process.env.CLIENT_URL, process.env.ADMIN_URL]
+    : ['http://localhost:3000', 'http://localhost:8081'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   credentials: true,
   maxAge: 86400
-};
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
-
-app.use(express.json({
-  limit: '10kb',
-  verify: (req, res, buf) => {
-    try {
-      JSON.parse(buf.toString());
-    } catch (e) {
-      res.status(400).json({ success: false, message: 'Invalid JSON payload' });
-    }
-  }
-}));
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
-
-// ==================== Logging ====================
-const logDirectory = path.join(__dirname, 'logs');
-if (!fs.existsSync(logDirectory)) fs.mkdirSync(logDirectory);
-
-const accessLogStream = fs.createWriteStream(
-  path.join(logDirectory, `access-${format(new Date(), 'yyyy-MM-dd')}.log`),
-  { flags: 'a' }
-);
-
-app.use(morgan(IS_PRODUCTION ? 'combined' : 'dev', {
-  stream: IS_PRODUCTION ? accessLogStream : process.stdout,
-  skip: (req) => req.path === '/health'
 }));
 
-// ==================== Rate Limiting ====================
+// ==================== RATE LIMITING ====================
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: IS_PRODUCTION ? 100 : 1000,
+  max: isProduction ? 300 : 1000,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => req.path.startsWith('/health'),
-  handler: (req, res) => {
-    res.status(429).json({
-      success: false,
-      message: 'Too many requests, please try again later'
-    });
+  message: {
+    success: false,
+    code: 'RATE_LIMITED',
+    message: 'Too many requests, please try again later'
   }
 });
-app.use('/api', apiLimiter);
+app.use(apiLimiter);
 
-// ==================== Route Loader ====================
-const loadRoutes = () => {
-  console.log('🔍 Loading routes...');
+// ==================== PERFORMANCE & SANITIZATION ====================
+app.use(compression());
+app.use(express.json({ limit: '10kb' }));
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+app.use(mongoSanitize());
+app.use(xss());
+app.use(hpp());
 
-  // Load user routes first
-  const userRouter = require('./routes/userRoutes');
-  app.use('/api/users', userRouter);
-  console.log('✅ User routes loaded.');
+// ==================== LOGGING ====================
+const logFormat = isProduction
+  ? ':remote-addr - :remote-user [:date[clf]] ":method :url HTTP/:http-version" :status :res[content-length] ":referrer" ":user-agent"'
+  : 'dev';
 
-  const routes = [
-    { path: '/api/health', file: './routes/healthRoutes' },
-    { path: '/api/auth', file: './routes/authRoutes' },
-    { path: '/api/chat', file: './routes/chatRoutes' },
-    { path: '/api/matches', file: './routes/matchRoutes' },
-    { path: '/api/messages', file: './routes/messageRoutes' },
-    { path: '/api/payments', file: './routes/paymentRoutes' },
-    { path: '/api/photos', file: './routes/photoRoutes' },
-    { path: '/api/notifications', file: './routes/notificationRoutes' }
-  ];
+const accessLogStream = isProduction
+  ? fs.createWriteStream(path.join(__dirname, 'access.log'), { flags: 'a' })
+  : null;
 
-  routes.forEach(route => {
-    try {
-      if (route.path === '/api/users') return;
-      const router = require(route.file);
-      app.use(route.path, router);
-      console.log(`✅ Route loaded: ${route.path}`);
-    } catch (err) {
-      console.error(`❌ Failed to load route ${route.path}:`, err);
-      if (IS_PRODUCTION && !route.path.startsWith('/api/health')) {
-        process.exit(1);
-      }
+app.use(morgan(isProduction ? logFormat : 'dev', {
+  stream: isProduction ? accessLogStream : process.stdout,
+  skip: (req) => req.url === '/api/health'
+}));
+
+// ==================== CLOUDINARY CONFIG ====================
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+  secure: true
+});
+console.log(`🔐 Cloudinary configured (${isProduction ? 'Production-ready' : 'Dev mode'})`);
+
+// ==================== ROUTE REGISTRATION ====================
+console.log('\n🔍 Registering routes:\n');
+const routeLoadOrder = [
+  { name: 'authRoutes', prefix: '/api/auth' },
+  { name: 'healthRoutes', prefix: '/api/health' },
+  { name: 'paymentRoutes', prefix: '/api/payments' },
+  { name: 'notificationRoutes', prefix: '/api/notifications' },
+  { name: 'likeRoutes', prefix: '/api/likes' },
+  { name: 'userRoutes', prefix: '/api/users' },
+  { name: 'photoRoutes', prefix: '/api/photos' },
+  { name: 'chatRoutes', prefix: '/api/chats' },
+  { name: 'matchRoutes', prefix: '/api/matches' }
+];
+
+const logRouteEndpoints = (router, prefix) => {
+  if (!router || !router.stack) return;
+  router.stack.forEach(layer => {
+    if (layer.route) {
+      const methods = Object.keys(layer.route.methods).map(m => m.toUpperCase()).join(', ');
+      console.log(`  ${methods.padEnd(8)} ${prefix}${layer.route.path}`);
+    } else if (layer.handle && layer.handle.stack) {
+      logRouteEndpoints(layer.handle, prefix); // nested router
     }
   });
 };
 
-// ==================== Test Token Decoding ====================
-app.get('/api/test-token', (req, res) => {
+routeLoadOrder.forEach(route => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ success: false, message: 'No token provided' });
+    const routeFile = path.join(__dirname, 'routes', `${route.name}.js`);
+    if (!fs.existsSync(routeFile)) {
+      console.log(`⏩ ${route.name} not found, skipping`);
+      return;
     }
-    const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    res.json({ success: true, message: 'Token decoded successfully', decoded });
+    if (!isProduction) delete require.cache[require.resolve(routeFile)];
+
+    const exported = require(routeFile);
+    const isMiddlewareFn = typeof exported === 'function';
+    const isRouterObj = typeof exported === 'object' && exported !== null && typeof exported.use === 'function';
+
+    if (!(isMiddlewareFn || isRouterObj)) {
+      throw new Error(`Invalid export from ${route.name}. Expected an Express router or middleware function but got ${typeof exported}`);
+    }
+
+    app.use(route.prefix, exported);
+    console.log(`✅ Mounted ${route.prefix}`);
+
+    if (!isProduction && debugRoutes) {
+      console.log(`🔍 ${route.name} Endpoints:`);
+      logRouteEndpoints(exported, route.prefix);
+    }
   } catch (err) {
-    console.error('Token decoding failed:', err.message);
-    res.status(401).json({ success: false, message: err.message });
+    console.error(`❌ Failed to load ${route.name}: ${err.message}`);
+    console.error(err.stack);
   }
 });
 
-// ==================== DB Init ====================
-const initializeDatabase = async () => {
-  console.log('🔄 Connecting to MongoDB...');
+if (!isProduction && debugRoutes) {
+  console.log('\n🔍 Final Route Stack:');
+  app._router.stack.forEach(layer => {
+    if (layer.name === 'router' && layer.handle) {
+      const prefix = layer.regexp.toString()
+        .replace(/^\/\^/, '')
+        .replace(/\\\//g, '/')
+        .replace(/\$\//, '')
+        .replace(/\/i/, '');
+      console.log(`\n✅ Mounted at: ${prefix}`);
+      logRouteEndpoints(layer.handle, prefix);
+    }
+  });
+}
+console.log('✅ All routes registered');
+
+// ==================== SOCKET.IO SETUP ====================
+const io = new Server(server, {
+  cors: {
+    origin: isProduction
+      ? [process.env.CLIENT_URL, process.env.ADMIN_URL]
+      : ['http://localhost:3000', 'http://localhost:8081'],
+    methods: ['GET', 'POST']
+  },
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  transports: ['websocket', 'polling'],
+  path: '/socket.io',
+  serveClient: false
+});
+app.set('io', io);
+
+io.on('connection', (socket) => {
+  console.log(`🔌 Socket connected: ${socket.id} (Worker: ${process.pid})`);
+  ['statusSocket', 'chatSocket', 'notificationSocket'].forEach(handler => {
+    try {
+      require(`./sockets/${handler}`)(io, socket);
+      console.log(`⚡ Loaded ${handler}`);
+    } catch (err) {
+      console.error(`❌ Failed to load ${handler}: ${err.message}`);
+    }
+  });
+  socket.on('disconnect', reason => {
+    console.log(`❌ Socket disconnected: ${socket.id} (${reason})`);
+  });
+});
+
+// ==================== DATABASE CONNECTION ====================
+const connectDB = async () => {
   try {
+    mongoose.set('strictQuery', false);
     await mongoose.connect(process.env.MONGODB_URI, {
       serverSelectionTimeoutMS: 5000,
+      maxPoolSize: 100,
+      minPoolSize: 10,
       socketTimeoutMS: 45000,
-      connectTimeoutMS: 10000
+      family: 4
     });
-
     console.log('✅ MongoDB connected');
-    console.log(`📊 Database: ${mongoose.connection.db.databaseName}`);
-    mongoose.connection.on('error', err => console.error('❌ DB Error:', err));
-    mongoose.connection.on('disconnected', () => console.warn('⚠️ DB Disconnected'));
-
-    return true;
   } catch (err) {
-    console.error('❌ MongoDB Connection Failed:', err);
-    return false;
-  }
-};
-
-// ==================== Start Server ====================
-const startServer = async () => {
-  try {
-    console.log('🚀 Initializing server...');
-    const dbConnected = await initializeDatabase();
-
-    if (!dbConnected && IS_PRODUCTION) {
-      console.error('❌ Critical: DB connection failed in production.');
-      process.exit(1);
-    }
-
-    loadRoutes();
-
-    app.get('/health', (req, res) => {
-      res.json({
-        status: 'ok',
-        timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV || 'development',
-        dbStatus: mongoose.connection?.readyState === 1 ? 'connected' : 'disconnected',
-        uptime: process.uptime(),
-        memoryUsage: process.memoryUsage()
-      });
-    });
-
-    app.use((req, res) => {
-      console.warn(`⚠️ 404 Not Found: ${req.method} ${req.path}`);
-      res.status(404).json({
-        success: false,
-        message: 'Endpoint not found',
-        path: req.path,
-        suggestion: 'Check /health for available services'
-      });
-    });
-
-    app.use((err, req, res, next) => {
-      const statusCode = err.status || 500;
-      console.error(`❌ ${statusCode} ${req.method} ${req.path}`, err);
-      res.status(statusCode).json({
-        success: false,
-        message: err.message || 'Internal server error',
-        timestamp: new Date().toISOString(),
-        path: req.path,
-        ...(!IS_PRODUCTION && { stack: err.stack })
-      });
-    });
-
-    server.listen(PORT, HOST, () => {
-      console.log(`
-✅ Server is running at ${API_BASE_URL}
-📡 Socket.IO: ${io ? 'enabled' : 'disabled'}
-📊 Environment: ${process.env.NODE_ENV || 'development'}
-🔌 MongoDB: ${mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'}
-      `);
-    });
-
-  } catch (err) {
-    console.error('❌ Server startup failed:', err);
+    console.error('❌ MongoDB connection error:', err.message);
     process.exit(1);
   }
 };
+connectDB();
 
-// ==================== Shutdown Hook ====================
-const shutdown = async () => {
-  console.log('🛑 Shutting down...');
+// ==================== HEALTH CHECK ====================
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'UP',
+    uptime: process.uptime(),
+    timestamp: new Date(),
+    db: mongoose.connection.readyState === 1 ? 'CONNECTED' : 'DISCONNECTED',
+    worker: process.pid,
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
+
+// ==================== ERROR HANDLING ====================
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    code: 'ROUTE_NOT_FOUND',
+    message: `Route ${req.method} ${req.originalUrl} not found`
+  });
+});
+app.use((err, req, res, next) => {
+  console.error('⚠️ Server error:', err);
+  res.status(err.status || 500).json({
+    success: false,
+    code: err.code || 'SERVER_ERROR',
+    message: isProduction ? 'Internal server error' : err.message
+  });
+});
+
+// ==================== SERVER START ====================
+server.listen(PORT, HOST, () => {
+  console.log(`\n🚀 Server ${isProduction ? `(Worker ${process.pid})` : ''} running at ${API_BASE_URL}`);
+});
+
+// ==================== GRACEFUL SHUTDOWN ====================
+const shutdown = async (signal) => {
+  console.log(`\n🔴 Received ${signal}, shutting down...`);
   try {
-    await new Promise(resolve => server.close(resolve));
-    await mongoose.disconnect();
-    io.close();
-    console.log('✅ Graceful shutdown complete.');
-    process.exit(0);
+    server.close(() => console.log('✅ HTTP server closed'));
+    await mongoose.connection.close();
+    io.close(() => console.log('✅ Socket.IO closed'));
+    setTimeout(() => process.exit(0), 1000);
   } catch (err) {
-    console.error('⚠️ Shutdown error:', err);
+    console.error('❌ Shutdown error:', err);
     process.exit(1);
   }
 };
-
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
-
-startServer();
+['SIGINT', 'SIGTERM'].forEach(sig => process.on(sig, () => shutdown(sig)));
+process.on('uncaughtException', err => {
+  console.error('💥 Uncaught Exception:', err);
+  shutdown('uncaughtException');
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💥 Unhandled Rejection:', reason);
+});
