@@ -177,7 +177,7 @@ routeLoadOrder.forEach(route => {
     app.use(route.prefix, exported);
     console.log(`✅ Mounted ${route.prefix}`);
 
-    if (!isProduction && debugRoutes) {
+    if (debugRoutes) { // Changed from !isProduction && debugRoutes to just debugRoutes
       console.log(`🔍 ${route.name} Endpoints:`);
       logRouteEndpoints(exported, route.prefix);
     }
@@ -187,7 +187,7 @@ routeLoadOrder.forEach(route => {
   }
 });
 
-if (!isProduction && debugRoutes) {
+if (debugRoutes) { // Changed from !isProduction && debugRoutes to just debugRoutes
   console.log('\n🔍 Final Route Stack:');
   app._router.stack.forEach(layer => {
     if (layer.name === 'router' && layer.handle) {
@@ -202,6 +202,38 @@ if (!isProduction && debugRoutes) {
   });
 }
 console.log('✅ All routes registered');
+
+// ==================== DEBUG ENDPOINT FOR ROUTES ====================
+// Add a debug endpoint to list all registered routes
+app.get('/api/debug/routes', (req, res) => {
+  const routes = [];
+  
+  app._router.stack.forEach(layer => {
+    if (layer.name === 'router' && layer.handle) {
+      const prefix = layer.regexp.toString()
+        .replace(/^\/\^/, '')
+        .replace(/\\\//g, '/')
+        .replace(/\$\//, '')
+        .replace(/\/i/, '');
+      
+      layer.handle.stack.forEach(routeLayer => {
+        if (routeLayer.route) {
+          const methods = Object.keys(routeLayer.route.methods).join(', ').toUpperCase();
+          routes.push({
+            path: prefix + routeLayer.route.path,
+            methods: methods
+          });
+        }
+      });
+    }
+  });
+  
+  res.json({
+    success: true,
+    message: 'Registered routes',
+    routes: routes
+  });
+});
 
 // ==================== SOCKET.IO SETUP ====================
 const io = new Server(server, {
@@ -261,7 +293,19 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date(),
     db: mongoose.connection.readyState === 1 ? 'CONNECTED' : 'DISCONNECTED',
     worker: process.pid,
-    environment: process.env.NODE_ENV || 'development'
+    environment: process.env.NODE_ENV || 'development',
+    endpoints: [
+      '/api/auth/select-gender',
+      '/api/auth/register',
+      '/api/auth/login',
+      '/api/auth/me',
+      '/api/payments/mpesa',
+      '/api/photos/upload',
+      '/api/photos/feed',
+      '/api/likes/:photoId',
+      '/api/chats/initiate',
+      '/api/chats/:chatId/messages'
+    ]
   });
 });
 
@@ -270,7 +314,8 @@ app.use((req, res) => {
   res.status(404).json({
     success: false,
     code: 'ROUTE_NOT_FOUND',
-    message: `Route ${req.method} ${req.originalUrl} not found`
+    message: `Route ${req.method} ${req.originalUrl} not found`,
+    suggestion: 'Check /api/health for available services'
   });
 });
 app.use((err, req, res, next) => {
@@ -285,6 +330,8 @@ app.use((err, req, res, next) => {
 // ==================== SERVER START ====================
 server.listen(PORT, HOST, () => {
   console.log(`\n🚀 Server ${isProduction ? `(Worker ${process.pid})` : ''} running at ${API_BASE_URL}`);
+  console.log(`🔧 Debug mode: ${debugRoutes ? 'ENABLED' : 'DISABLED'}`);
+  console.log(`🌐 Environment: ${isProduction ? 'Production' : 'Development'}`);
 });
 
 // ==================== GRACEFUL SHUTDOWN ====================

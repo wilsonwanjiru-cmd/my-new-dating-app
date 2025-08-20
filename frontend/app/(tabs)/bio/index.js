@@ -1,90 +1,123 @@
 // app/(tabs)/bio/index.js
+// app/(tabs)/bio/index.js
+import React, { useState, useEffect, useCallback, useContext } from "react";
 import {
   StyleSheet,
   Text,
   View,
-  ScrollView,
   Image,
   Pressable,
   Alert,
   ActivityIndicator,
   TouchableOpacity,
-  Modal,
-  Dimensions
+  RefreshControl,
+  FlatList
 } from "react-native";
-import React, { useState, useEffect } from "react";
-import { Entypo, AntDesign, FontAwesome, MaterialIcons } from "@expo/vector-icons";
-import * as ImagePicker from 'expo-image-picker';
-import Carousel from "react-native-reanimated-carousel";
-import { useAuth } from "../../_context/AuthContext";
+import { Entypo, AntDesign, MaterialIcons } from "@expo/vector-icons";
+import { useAuth } from "../../../src/_context/AuthContext";
 import { useRouter } from "expo-router";
-import apiClient from "../../_api/client";
-
-const { width } = Dimensions.get('window');
+import { useSocket } from "../../../src/_context/SocketContext";
+import { likePhoto, getFeedPhotos } from "../../../src/_api/photos";
 
 const BioScreen = () => {
   const router = useRouter();
-  const { 
-    user, 
-    isSubscribed,
-    likePhoto,
-    startChat,
-    updateUser
-  } = useAuth();
+  const { user, isSubscribed, startChat } = useAuth();
+  const { onlineUsers } = useSocket();
   
-  const [option, setOption] = useState("Photos");
-  const [activeSlide, setActiveSlide] = useState(0);
-  const [showGenderModal, setShowGenderModal] = useState(false);
-  const [selectedGender, setSelectedGender] = useState(user?.gender || "");
-  const [updatingGender, setUpdatingGender] = useState(false);
-  const [uploadingPhoto, setUploadingPhoto] = useState(false);
-  const [likedPhotos, setLikedPhotos] = useState([]);
+  const [photos, setPhotos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
 
-  // Initialize state from user data
-  useEffect(() => {
-    if (user) {
-      setSelectedGender(user.gender || "");
-      // Initialize liked photos from user data if available
-      if (user.likedPhotos) {
-        setLikedPhotos(user.likedPhotos);
-      }
-    }
-  }, [user]);
-
-  const turnons = [
-    { id: "0", name: "Music", description: "Pop Rock-Indie pick our sound track" },
-    { id: "1", name: "Fantasies", description: "Can be deeply personal and romantic" },
-    { id: "2", name: "Nibbling", description: "Playful form of gentle bites" },
-    { id: "3", name: "Desire", description: "Powerful emotion of attraction" },
-  ];
-
-  const lookingForOptions = [
-    { id: "0", name: "Casual", description: "Let's keep it easy" },
-    { id: "1", name: "Long Term", description: "One life stand" },
-    { id: "2", name: "Virtual", description: "Virtual fun" },
-    { id: "3", name: "Open", description: "Let's vibe" },
-  ];
-
-  const genderOptions = ['male', 'female', 'non-binary', 'prefer-not-to-say'];
-
-  // Handle photo like
-  const handleLike = async (photoId) => {
+  // Fetch photos based on gender preference
+  const fetchPhotos = useCallback(async (pageNum = 1) => {
     try {
-      const result = await likePhoto(photoId);
-      if (result.success) {
-        setLikedPhotos(prev => 
-          prev.includes(photoId) 
-            ? prev.filter(id => id !== photoId) 
-            : [...prev, photoId]
-        );
+      if (!user?.gender) return;
+      
+      setLoading(true);
+      const oppositeGender = user.gender === "male" ? "female" : "male";
+      const response = await getFeedPhotos(oppositeGender);
+      
+      if (pageNum === 1) {
+        setPhotos(response.data);
+      } else {
+        setPhotos(prev => [...prev, ...response.data]);
       }
+      
+      setHasMore(response.data.length > 0);
+      setPage(pageNum);
     } catch (error) {
-      console.error("Error liking photo:", error);
+      console.error("Error fetching photos:", error);
+      Alert.alert("Error", "Failed to load photos. Please try again.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [user?.gender]);
+
+  // Initial load
+  useEffect(() => {
+    fetchPhotos();
+  }, [fetchPhotos]);
+
+  // Refresh control
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    fetchPhotos(1);
+  }, [fetchPhotos]);
+
+  // Load more photos
+  const loadMorePhotos = () => {
+    if (!loading && hasMore) {
+      fetchPhotos(page + 1);
+    }
+  };
+
+  // Handle photo like with optimistic updates
+  const handleLike = async (photoId, currentIsLiked) => {
+    try {
+      // Optimistic UI update
+      setPhotos(prev => prev.map(photo => 
+        photo._id === photoId 
+          ? { 
+              ...photo, 
+              likes: currentIsLiked ? photo.likes - 1 : photo.likes + 1, 
+              isLiked: !currentIsLiked 
+            } 
+          : photo
+      ));
+
+      // Actual API call
+      const result = await likePhoto(photoId, !currentIsLiked);
+      
+      // Sync with server response
+      setPhotos(prev => prev.map(photo => 
+        photo._id === photoId 
+          ? { 
+              ...photo, 
+              likes: result.data.likes, 
+              isLiked: result.data.isLiked 
+            } 
+          : photo
+      ));
+    } catch (error) {
+      // Revert on error
+      setPhotos(prev => prev.map(photo => 
+        photo._id === photoId 
+          ? { 
+              ...photo, 
+              likes: currentIsLiked ? photo.likes + 1 : photo.likes - 1, 
+              isLiked: currentIsLiked 
+            } 
+          : photo
+      ));
+      Alert.alert("Error", "Failed to update like. Please try again.");
     }
   };
 
   // Handle chat initiation
-  const handleChat = async () => {
+  const handleChat = async (userId) => {
     if (!isSubscribed) {
       Alert.alert(
         "Subscribe to Chat",
@@ -96,440 +129,319 @@ const BioScreen = () => {
       );
       return;
     }
-    // Implement your chat initiation logic here
-    router.push("/chat");
-  };
-
-  // Handle photo upload
-  const handlePhotoUpload = async () => {
+    
     try {
-      setUploadingPhoto(true);
-      
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert("Permission required", "We need access to your photos to upload images");
-        return;
-      }
-
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [4, 3],
-        quality: 0.8,
-      });
-
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        const imageUri = result.assets[0].uri;
-        
-        const formData = new FormData();
-        formData.append('photo', {
-          uri: imageUri,
-          type: 'image/jpeg',
-          name: 'profile-photo.jpg'
-        });
-
-        const response = await apiClient.post('/api/photos/upload', formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-          transformRequest: (data) => data,
-        });
-
-        await updateUser({ 
-          profileImages: [...(user?.profileImages || []), response.data.imageUrl] 
-        });
-        
-        Alert.alert("Success", "Photo uploaded successfully");
+      const result = await startChat(userId);
+      if (result.success) {
+        router.push(`/chat/${result.chatId}`);
       }
     } catch (error) {
-      console.error("Upload error:", error);
-      Alert.alert("Upload Failed", "Failed to upload photo. Please try again.");
-    } finally {
-      setUploadingPhoto(false);
+      console.error("Error starting chat:", error);
     }
   };
 
-  // Render carousel item with like and chat buttons
-  const renderImageCarousel = ({ item, index }) => {
-    const imageUrl = typeof item === 'string' ? item : item.url;
-    const photoId = item._id || index.toString();
-    const isLiked = likedPhotos.includes(photoId);
+  // Render photo card with like functionality
+  const renderPhotoCard = ({ item }) => {
+    const isOnline = onlineUsers.includes(item.userId);
+    const isCurrentUser = user?._id === item.userId;
 
     return (
-      <View style={styles.carouselItem}>
+      <View style={styles.photoCard} key={item._id}>
+        {/* User info header */}
+        <View style={styles.userHeader}>
+          <View style={styles.userInfo}>
+            <View style={{ position: 'relative' }}>
+              <Image
+                style={styles.userAvatar}
+                source={{ uri: item.user?.profileImages?.[0]?.url || "https://via.placeholder.com/100" }}
+              />
+              {isOnline && !isCurrentUser && <View style={styles.onlineIndicator} />}
+            </View>
+            <View>
+              <Text style={styles.userName}>{item.user?.name || "User"}</Text>
+              <Text style={styles.userAge}>{item.user?.age || ''} years</Text>
+            </View>
+          </View>
+          
+          {!isCurrentUser && (
+            <TouchableOpacity onPress={() => handleChat(item.userId)}>
+              <MaterialIcons name="chat" size={24} color="#FF1493" />
+            </TouchableOpacity>
+          )}
+        </View>
+        
+        {/* Photo */}
         <Image
-          style={styles.carouselImage}
-          source={{ uri: imageUrl }}
+          style={styles.photoImage}
+          source={{ uri: item.url }}
         />
+        
+        {/* Photo actions */}
         <View style={styles.photoActions}>
           <TouchableOpacity 
-            style={styles.actionButton}
-            onPress={() => handleLike(photoId)}
+            style={styles.likeButton}
+            onPress={() => handleLike(item._id, item.isLiked)}
           >
             <AntDesign 
-              name={isLiked ? "heart" : "hearto"} 
+              name={item.isLiked ? "heart" : "hearto"} 
               size={24} 
-              color={isLiked ? "#fd5c63" : "white"} 
+              color={item.isLiked ? "#FF1493" : "#444"} 
             />
-            <Text style={styles.actionButtonText}>
+            <Text style={[styles.likeCount, item.isLiked && styles.likedCount]}>
               {item.likes || 0}
             </Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={styles.actionButton}
-            onPress={handleChat}
-          >
-            <MaterialIcons name="chat" size={24} color="white" />
-            <Text style={styles.actionButtonText}>Chat</Text>
           </TouchableOpacity>
         </View>
       </View>
     );
   };
 
-  // Format gender display text
-  const formatGenderText = (gender) => {
-    return gender.split('-').map(word => 
-      word.charAt(0).toUpperCase() + word.slice(1)
-    ).join('-');
-  };
-
-  // Update gender
-  const handleGenderUpdate = async () => {
-    try {
-      setUpdatingGender(true);
-      await updateUser({ gender: selectedGender });
-      setShowGenderModal(false);
-      Alert.alert("Success", "Gender updated successfully");
-    } catch (error) {
-      console.error("Update error:", error);
-      Alert.alert("Error", "Failed to update gender");
-    } finally {
-      setUpdatingGender(false);
-    }
-  };
-
   return (
-    <ScrollView style={styles.container}>
-      {/* Profile Header */}
-      <View style={styles.profileHeader}>
-        <View style={styles.headerImagePlaceholder} />
-        <View style={styles.profileBadge}>
+    <View style={styles.container}>
+      {/* Header */}
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Discover</Text>
+        <TouchableOpacity onPress={() => router.push("/(tabs)/profile")}>
           <Image
             style={styles.profileImage}
             source={{ 
-              uri: user?.profileImages?.[0]?.url || 
-                   user?.profileImages?.[0] || 
-                   "https://via.placeholder.com/100" 
+              uri: user?.profileImages?.[0]?.url || "https://via.placeholder.com/100" 
             }}
           />
-          <Text style={styles.profileName}>{user?.name || "User"}</Text>
-          <Text style={styles.profileAge}>{user?.age || ''} years</Text>
-          <TouchableOpacity onPress={() => setShowGenderModal(true)}>
-            <Text style={styles.genderText}>
-              {user?.gender ? formatGenderText(user.gender) : 'Set gender'}
-            </Text>
-          </TouchableOpacity>
+        </TouchableOpacity>
+      </View>
+
+      {/* Photo Feed */}
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#FF1493" />
         </View>
-      </View>
-
-      {/* Options Tabs */}
-      <View style={styles.tabsContainer}>
-        <Pressable onPress={() => setOption("Photos")}>
-          <Text style={[styles.tabText, option === "Photos" && styles.activeTab]}>
-            Photos
+      ) : photos.length > 0 ? (
+        <FlatList
+          data={photos}
+          renderItem={renderPhotoCard}
+          keyExtractor={item => item._id}
+          contentContainerStyle={styles.photoFeed}
+          onEndReached={loadMorePhotos}
+          onEndReachedThreshold={0.5}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          refreshControl={
+            <RefreshControl 
+              refreshing={refreshing} 
+              onRefresh={onRefresh}
+              tintColor="#FF1493"
+            />
+          }
+          ListFooterComponent={
+            hasMore ? (
+              <Pressable 
+                style={styles.loadMoreButton} 
+                onPress={loadMorePhotos}
+                disabled={loading}
+              >
+                <Text style={styles.loadMoreText}>Load More Photos</Text>
+              </Pressable>
+            ) : null
+          }
+        />
+      ) : (
+        <View style={styles.emptyState}>
+          <Image
+            style={styles.emptyImage}
+            source={{ uri: "https://cdn-icons-png.flaticon.com/128/776/776528.png" }}
+          />
+          <Text style={styles.emptyTitle}>No Photos Available</Text>
+          <Text style={styles.emptyText}>
+            {user?.gender === "male" 
+              ? "There are currently no female users with photos" 
+              : "There are currently no male users with photos"}
           </Text>
-        </Pressable>
-        <Pressable onPress={() => setOption("Turn-ons")}>
-          <Text style={[styles.tabText, option === "Turn-ons" && styles.activeTab]}>
-            Turn-ons
-          </Text>
-        </Pressable>
-        <Pressable onPress={() => setOption("Looking For")}>
-          <Text style={[styles.tabText, option === "Looking For" && styles.activeTab]}>
-            Looking For
-          </Text>
-        </Pressable>
-      </View>
-
-      {/* Photos Section */}
-      {option === "Photos" && (
-        <View style={styles.sectionContainer}>
-          {user?.profileImages?.length > 0 ? (
-            <>
-              <Carousel
-                data={user.profileImages}
-                renderItem={renderImageCarousel}
-                width={width}
-                height={400}
-                onSnapToItem={setActiveSlide}
-              />
-            </>
-          ) : (
-            <Text style={styles.noPhotosText}>No photos available</Text>
-          )}
-
-          {/* Photo Upload Section */}
-          <View style={styles.uploadContainer}>
-            <Pressable
-              onPress={handlePhotoUpload}
-              style={styles.uploadButton}
-              disabled={uploadingPhoto}
-            >
-              {uploadingPhoto ? (
-                <ActivityIndicator color="white" />
-              ) : (
-                <>
-                  <Entypo name="camera" size={20} color="white" style={styles.uploadIcon} />
-                  <Text style={styles.uploadButtonText}>Upload Photo</Text>
-                </>
-              )}
-            </Pressable>
-          </View>
         </View>
       )}
 
-      {/* Gender Update Modal */}
-      <Modal
-        visible={showGenderModal}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setShowGenderModal(false)}
+      {/* Upload Button */}
+      <TouchableOpacity
+        style={styles.uploadButton}
+        onPress={() => router.push("/upload-photo")}
       >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Select Your Gender</Text>
-            
-            {genderOptions.map(gender => (
-              <TouchableOpacity
-                key={gender}
-                style={[
-                  styles.genderOption,
-                  selectedGender === gender && styles.selectedGenderOption
-                ]}
-                onPress={() => setSelectedGender(gender)}
-              >
-                <Text style={[
-                  styles.genderOptionText,
-                  selectedGender === gender && styles.selectedGenderOptionText
-                ]}>
-                  {formatGenderText(gender)}
-                </Text>
-              </TouchableOpacity>
-            ))}
-
-            <View style={styles.modalButtons}>
-              <TouchableOpacity 
-                style={styles.cancelButton}
-                onPress={() => setShowGenderModal(false)}
-              >
-                <Text style={[styles.buttonText, { color: '#000' }]}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={styles.saveButton}
-                onPress={handleGenderUpdate}
-                disabled={updatingGender}
-              >
-                {updatingGender ? (
-                  <ActivityIndicator color="white" />
-                ) : (
-                  <Text style={styles.buttonText}>Save</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-    </ScrollView>
+        <Entypo name="camera" size={24} color="white" />
+      </TouchableOpacity>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: '#f8f9fa',
   },
-  profileHeader: {
-    position: 'relative',
-    marginBottom: 60
-  },
-  headerImagePlaceholder: {
-    width: '100%',
-    height: 180,
-    backgroundColor: '#fd5c63'
-  },
-  profileBadge: {
-    position: 'absolute',
-    bottom: -50,
-    left: '50%',
-    transform: [{ translateX: -50 }],
-    width: 100,
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#fff',
-    padding: 10,
-    borderRadius: 10,
+    padding: 15,
+    backgroundColor: 'white',
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  headerTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#FF1493',
+  },
+  profileImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#FF69B4',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 50,
+  },
+  photoFeed: {
+    padding: 15,
+  },
+  photoCard: {
+    backgroundColor: 'white',
+    borderRadius: 15,
+    marginBottom: 20,
+    overflow: 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
-    elevation: 2
+    elevation: 3,
   },
-  profileImage: {
+  userHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 15,
+    backgroundColor: '#FFF5F7',
+  },
+  userInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  userAvatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: '#FFD1DC',
+  },
+  onlineIndicator: {
+    position: 'absolute',
+    bottom: 5,
+    right: 5,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#4CAF50',
+    borderWidth: 2,
+    borderColor: 'white',
+  },
+  userName: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  userAge: {
+    fontSize: 14,
+    color: '#777',
+  },
+  photoImage: {
+    width: '100%',
+    aspectRatio: 0.75,
+    backgroundColor: '#f0f0f0',
+  },
+  photoActions: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    padding: 15,
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+  },
+  likeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    backgroundColor: '#FFF0F5',
+    borderRadius: 20,
+  },
+  likeCount: {
+    marginLeft: 8,
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#444',
+  },
+  likedCount: {
+    color: '#FF1493',
+  },
+  loadMoreButton: {
+    backgroundColor: '#FF1493',
+    padding: 15,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginTop: 10,
+    marginBottom: 20,
+  },
+  loadMoreText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  emptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 40,
+  },
+  emptyImage: {
+    width: 120,
+    height: 120,
+    marginBottom: 20,
+    opacity: 0.7,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 10,
+    color: '#444',
+  },
+  emptyText: {
+    fontSize: 16,
+    color: '#777',
+    textAlign: 'center',
+    lineHeight: 24,
+  },
+  uploadButton: {
+    position: 'absolute',
+    bottom: 30,
+    right: 30,
     width: 60,
     height: 60,
     borderRadius: 30,
-    borderWidth: 2,
-    borderColor: '#fd5c63'
-  },
-  profileName: {
-    marginTop: 5,
-    fontWeight: '600'
-  },
-  profileAge: {
-    color: '#666',
-    fontSize: 12
-  },
-  genderText: {
-    color: '#007AFF',
-    fontSize: 12,
-    marginTop: 2
-  },
-  tabsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee'
-  },
-  tabText: {
-    fontSize: 16,
-    color: '#666'
-  },
-  activeTab: {
-    color: '#fd5c63',
-    fontWeight: '600',
-    borderBottomWidth: 2,
-    borderBottomColor: '#fd5c63'
-  },
-  sectionContainer: {
-    padding: 15
-  },
-  carouselItem: {
-    width: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative'
-  },
-  carouselImage: {
-    width: '90%',
-    height: 350,
-    borderRadius: 10,
-  },
-  photoActions: {
-    position: 'absolute',
-    bottom: 20,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingHorizontal: 40
-  },
-  actionButton: {
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    padding: 10,
-    borderRadius: 20,
-    flexDirection: 'row',
-    alignItems: 'center'
-  },
-  actionButtonText: {
-    color: 'white',
-    marginLeft: 5,
-    fontWeight: 'bold'
-  },
-  noPhotosText: {
-    textAlign: 'center',
-    marginVertical: 20,
-    color: '#888'
-  },
-  uploadContainer: {
-    marginTop: 20,
-    borderTopWidth: 1,
-    borderTopColor: '#eee',
-    paddingTop: 20
-  },
-  uploadButton: {
-    backgroundColor: '#fd5c63',
-    padding: 15,
-    borderRadius: 5,
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'center'
-  },
-  uploadButtonText: {
-    color: '#fff',
-    fontWeight: '600'
-  },
-  uploadIcon: {
-    marginRight: 10
-  },
-  modalContainer: {
-    flex: 1,
+    backgroundColor: '#FF1493',
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)'
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 8,
   },
-  modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 10,
-    padding: 20,
-    width: '80%'
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 20,
-    textAlign: 'center'
-  },
-  genderOption: {
-    padding: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee'
-  },
-  selectedGenderOption: {
-    backgroundColor: '#f5f5f5'
-  },
-  genderOptionText: {
-    fontSize: 16
-  },
-  selectedGenderOptionText: {
-    color: '#fd5c63',
-    fontWeight: '600'
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 20
-  },
-  cancelButton: {
-    padding: 10,
-    borderRadius: 5,
-    borderWidth: 1,
-    borderColor: '#ccc',
-    flex: 1,
-    marginRight: 10,
-    alignItems: 'center'
-  },
-  saveButton: {
-    backgroundColor: '#fd5c63',
-    padding: 10,
-    borderRadius: 5,
-    flex: 1,
-    alignItems: 'center'
-  },
-  buttonText: {
-    color: 'white',
-    fontWeight: '600'
-  }
 });
 
 export default BioScreen;

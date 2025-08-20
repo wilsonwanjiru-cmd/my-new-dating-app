@@ -141,6 +141,7 @@ router.get(
   getCurrentUser
 );
 
+// FIXED: Ensure select-gender route is properly defined
 router.post(
   '/select-gender',
   authenticate,
@@ -204,6 +205,26 @@ router.post(
   validateRequest,
   initiateChat
 );
+
+// ==================== DEBUG ENDPOINT ====================
+// Add a debug endpoint to list all registered routes
+router.get('/debug/routes', (req, res) => {
+  const routes = [];
+  router.stack.forEach((layer) => {
+    if (layer.route) {
+      const methods = Object.keys(layer.route.methods).join(', ').toUpperCase();
+      routes.push({
+        path: layer.route.path,
+        methods: methods
+      });
+    }
+  });
+  res.json({
+    success: true,
+    message: 'Registered auth routes',
+    routes: routes
+  });
+});
 
 // ==================== ROUTE DEBUG LOG ====================
 console.log('\n🔍 Auth Router Registered Routes:');

@@ -1,138 +1,58 @@
-// frontend/index.js
-// frontend/app/index.js
+// app/index.js
 import React, { useEffect, useState } from 'react';
 import { Redirect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { jwtDecode } from 'jwt-decode';
-import axios from 'axios';
-import Constants from 'expo-constants';
 import { ActivityIndicator, View, StyleSheet } from 'react-native';
+import Constants from 'expo-constants';
 
-import { AuthProvider } from './_context/AuthContext'; // ✅ Make sure this path is correct
+// Update import paths to point to the new location in src directory
+import { AuthProvider } from '../src/_context/AuthContext';
+import { SocketProvider } from '../src/_context/SocketContext';
+import { SubscriptionProvider } from '../src/_context/SubscriptionContext';
 
 const API_BASE_URL = Constants.expoConfig?.extra?.apiBaseUrl || 'https://dating-app-3eba.onrender.com';
-
-// Axios defaults
-axios.defaults.baseURL = API_BASE_URL;
-axios.defaults.timeout = 10000;
-
-axios.interceptors.response.use(
-  response => response,
-  async error => {
-    const originalRequest = error.config;
-
-    if (error.response?.status === 401 && !originalRequest._retry) {
-      originalRequest._retry = true;
-
-      try {
-        const refreshToken = await AsyncStorage.getItem('refreshToken');
-        if (!refreshToken) throw new Error('No refresh token available');
-
-        const response = await axios.post('/api/auth/refresh-token', { refreshToken });
-        const newToken = response.data.token;
-
-        await AsyncStorage.setItem('auth', newToken);
-        if (response.data.refreshToken) {
-          await AsyncStorage.setItem('refreshToken', response.data.refreshToken);
-        }
-
-        axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
-        originalRequest.headers['Authorization'] = `Bearer ${newToken}`;
-
-        return axios(originalRequest);
-      } catch (refreshError) {
-        await Promise.all([
-          AsyncStorage.removeItem('auth'),
-          AsyncStorage.removeItem('refreshToken'),
-          AsyncStorage.removeItem('user')
-        ]);
-        throw refreshError;
-      }
-    }
-
-    return Promise.reject(error);
-  }
-);
 
 const AppInitializer = () => {
   const [redirectPath, setRedirectPath] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const verifyToken = async (token) => {
-    try {
-      const response = await axios.get('/api/auth/verify-token', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      return response.data.valid;
-    } catch {
-      return false;
-    }
-  };
-
-  const fetchUserData = async (userId, token) => {
-    const response = await axios.get(`/api/users/${userId}`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    return response.data;
-  };
-
   const initializeApp = async () => {
     try {
-      const token = await AsyncStorage.getItem('auth');
-      if (!token) {
+      // Check if we have authentication tokens
+      const [authToken, refreshToken] = await Promise.all([
+        AsyncStorage.getItem('authToken'),
+        AsyncStorage.getItem('refreshToken')
+      ]);
+
+      if (!authToken || !refreshToken) {
         setRedirectPath('/(authenticate)/login');
+        setLoading(false);
         return;
       }
 
-      let decoded;
-      try {
-        decoded = jwtDecode(token);
-        if (!decoded.userId) throw new Error('Invalid token');
-      } catch {
-        throw new Error('Invalid token format');
+      // Check if we have user data
+      const userData = await AsyncStorage.getItem('userData');
+      if (!userData) {
+        setRedirectPath('/(authenticate)/login');
+        setLoading(false);
+        return;
       }
 
-      const isValid = await verifyToken(token);
-      if (!isValid) throw new Error('Token expired');
-
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-      const user = await fetchUserData(decoded.userId, token);
-
-      const updatedUser = {
-        ...user,
-        isSubscribed: user.subscriptionExpiresAt
-          ? new Date(user.subscriptionExpiresAt) > new Date()
-          : false
-      };
-
-      await AsyncStorage.setItem('user', JSON.stringify(updatedUser));
-
-      if (!updatedUser.profileComplete) {
-        setRedirectPath('/(tabs)/bio');
-      } else {
+      // Parse user data
+      const user = JSON.parse(userData);
+      
+      // Determine where to redirect based on user status
+      if (!user.gender) {
+        setRedirectPath('/(authenticate)/select');
+      } else if (!user.profileComplete) {
         setRedirectPath('/(tabs)/profile');
-      }
-
-    } catch (error) {
-      await Promise.all([
-        AsyncStorage.removeItem('auth'),
-        AsyncStorage.removeItem('refreshToken'),
-        AsyncStorage.removeItem('user')
-      ]);
-
-      let errorPath = '/(authenticate)/login';
-
-      if (error.message.includes('Invalid token')) {
-        errorPath += '?error=invalid_token';
-      } else if (error.response?.status === 404) {
-        errorPath = '/(authenticate)/register';
-      } else if (error.message.includes('network')) {
-        errorPath += '?error=network';
       } else {
-        errorPath += '?error=unknown';
+        setRedirectPath('/(tabs)/bio');
       }
-
-      setRedirectPath(errorPath);
+      
+    } catch (error) {
+      console.error("Initialization error:", error);
+      setRedirectPath('/(authenticate)/login');
     } finally {
       setLoading(false);
     }
@@ -145,7 +65,7 @@ const AppInitializer = () => {
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" />
+        <ActivityIndicator size="large" color="#FF1493" />
       </View>
     );
   }
@@ -165,7 +85,11 @@ const styles = StyleSheet.create({
 export default function Index() {
   return (
     <AuthProvider>
-      <AppInitializer />
+      <SocketProvider>
+        <SubscriptionProvider>
+          <AppInitializer />
+        </SubscriptionProvider>
+      </SocketProvider>
     </AuthProvider>
   );
 }

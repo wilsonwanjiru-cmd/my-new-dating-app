@@ -1,8 +1,8 @@
 // frontend/app/_layout.js
 import { Slot } from 'expo-router';
-import { AuthProvider } from './_context/AuthContext';
-import { SubscriptionProvider } from './_context/SubscriptionContext';
-import { SocketProvider } from './_context/SocketContext';
+import { AuthProvider } from '../src/_context/AuthContext';
+import { SocketProvider } from '../src/_context/SocketContext';
+import { SubscriptionProvider } from '../src/_context/SubscriptionContext';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -35,10 +35,10 @@ export default function RootLayout() {
                   translucent
                 />
                 
-                {/* Main app content slot */}
+                {/* Main app content */}
                 <Slot />
-
-                {/* Simplified Toast configuration */}
+                
+                {/* Toast notifications */}
                 <Toast />
               </SubscriptionProvider>
             </SocketProvider>

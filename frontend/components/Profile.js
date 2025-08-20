@@ -11,32 +11,35 @@ import { Entypo } from "@expo/vector-icons";
 import { AntDesign } from "@expo/vector-icons";
 import { FontAwesome } from "@expo/vector-icons";
 import axios from "axios";
-import { Animated } from 'react-native';
+import * as Animatable from 'react-native-animatable';
+import { useSocket } from '../app/_context/SocketContext'; // Added SocketContext
 
 // Use the environment variable for the backend URL
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "https://dating-app-3eba.onrender.com";
 
 const Profile = ({ item, isEven, userId, setProfiles }) => {
-  const [liked, setLiked] = useState(false); // State to track if the profile is liked
-  const [selected, setSelected] = useState(false); // State to track if the profile is selected
+  const [liked, setLiked] = useState(false);
+  const [selected, setSelected] = useState(false);
+  
+  // Added online status tracking
+  const { onlineUsers } = useSocket();
+  const isOnline = onlineUsers.includes(item?._id); // Check if user is online
 
   // Function to handle sending a like
   const handleLike = async (selectedUserId) => {
     try {
-      setLiked(true); // Set liked state to true
-      const response = await axios.post(`${API_BASE_URL}/api/match/send-like`, {
+      setLiked(true);
+      await axios.post(`${API_BASE_URL}/api/match/send-like`, {
         currentUserId: userId,
         selectedUserId: selectedUserId,
       });
 
-      console.log("Like response:", response.data);
-
-      // Remove the profile from the list after a short delay
+      // Remove profile after short delay
       setTimeout(() => {
         setProfiles((prevProfiles) =>
           prevProfiles.filter((profile) => profile._id !== selectedUserId)
         );
-        setLiked(false); // Reset liked state
+        setLiked(false);
       }, 200);
     } catch (error) {
       console.log("Error liking profile:", error);
@@ -46,20 +49,18 @@ const Profile = ({ item, isEven, userId, setProfiles }) => {
   // Function to handle sending a like (alternative)
   const handleLikeOther = async (selectedUserId) => {
     try {
-      setSelected(true); // Set selected state to true
-      const response = await axios.post(`${API_BASE_URL}/api/match/send-like`, {
+      setSelected(true);
+      await axios.post(`${API_BASE_URL}/api/match/send-like`, {
         currentUserId: userId,
         selectedUserId: selectedUserId,
       });
 
-      console.log("Like response:", response.data);
-
-      // Remove the profile from the list after a short delay
+      // Remove profile after short delay
       setTimeout(() => {
         setProfiles((prevProfiles) =>
           prevProfiles.filter((profile) => profile._id !== selectedUserId)
         );
-        setSelected(false); // Reset selected state
+        setSelected(false);
       }, 200);
     } catch (error) {
       console.log("Error liking profile:", error);
@@ -73,9 +74,12 @@ const Profile = ({ item, isEven, userId, setProfiles }) => {
         <ScrollView showsHorizontalScrollIndicator={false} horizontal>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 50 }}>
             <View>
-              <Text style={{ fontSize: 17, fontWeight: "600" }}>
-                {item?.name}
-              </Text>
+              <View style={styles.nameContainer}>
+                <Text style={{ fontSize: 17, fontWeight: "600" }}>
+                  {item?.name}
+                </Text>
+                {isOnline && <View style={styles.greenDot} />}
+              </View>
               <Text
                 style={{
                   width: 200,
@@ -93,16 +97,18 @@ const Profile = ({ item, isEven, userId, setProfiles }) => {
             </View>
 
             {item?.profileImages?.slice(0, 1).map((item, index) => (
-              <Image
-                key={index}
-                style={{
-                  width: 280,
-                  height: 280,
-                  resizeMode: "cover",
-                  borderRadius: 5,
-                }}
-                source={{ uri: item }}
-              />
+              <View style={styles.imageContainer} key={index}>
+                <Image
+                  style={{
+                    width: 280,
+                    height: 280,
+                    resizeMode: "cover",
+                    borderRadius: 5,
+                  }}
+                  source={{ uri: item }}
+                />
+                {isOnline && <View style={styles.greenDotImage} />}
+              </View>
             ))}
           </View>
         </ScrollView>
@@ -180,21 +186,26 @@ const Profile = ({ item, isEven, userId, setProfiles }) => {
         <ScrollView showsHorizontalScrollIndicator={false} horizontal>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 50 }}>
             {item?.profileImages?.slice(0, 1).map((item, index) => (
-              <Image
-                key={index}
-                style={{
-                  width: 200,
-                  height: 280,
-                  resizeMode: "cover",
-                  borderRadius: 5,
-                }}
-                source={{ uri: item }}
-              />
+              <View style={styles.imageContainer} key={index}>
+                <Image
+                  style={{
+                    width: 200,
+                    height: 280,
+                    resizeMode: "cover",
+                    borderRadius: 5,
+                  }}
+                  source={{ uri: item }}
+                />
+                {isOnline && <View style={styles.greenDotImage} />}
+              </View>
             ))}
             <View>
-              <Text style={{ fontSize: 17, fontWeight: "600" }}>
-                {item?.name}
-              </Text>
+              <View style={styles.nameContainer}>
+                <Text style={{ fontSize: 17, fontWeight: "600" }}>
+                  {item?.name}
+                </Text>
+                {isOnline && <View style={styles.greenDot} />}
+              </View>
               <Text
                 style={{
                   width: 200,
@@ -282,4 +293,35 @@ const Profile = ({ item, isEven, userId, setProfiles }) => {
 
 export default Profile;
 
-const styles = StyleSheet.create({});
+const styles = StyleSheet.create({
+  // Added styles for online status
+  imageContainer: {
+    position: 'relative',
+  },
+  nameContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  greenDot: {
+    marginLeft: 8,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: 'green',
+    borderWidth: 2,
+    borderColor: 'white'
+  },
+  greenDotImage: {
+    position: 'absolute',
+    top: 5,
+    right: 5,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: 'green',
+    borderWidth: 2,
+    borderColor: 'white',
+    zIndex: 10,
+  },
+});
