@@ -12,20 +12,19 @@ import {
   Platform
 } from "react-native";
 import React, { useLayoutEffect, useState, useEffect, useRef } from "react";
-import { useNavigation } from "@react-navigation/native";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons, Feather, Entypo, MaterialCommunityIcons } from "@expo/vector-icons";
-import { useLocalSearchParams } from "expo-router";
 import { io } from "socket.io-client";
 import axios from "axios";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
-import { useAuth } from "../../_context/AuthContext";
+import { useAuth } from "../../../src/_context/AuthContext";
 import SubscribePrompt from "../../../components/SubscribePrompt";
 
 const API_BASE_URL = Constants.expoConfig?.extra?.apiBaseUrl || "https://dating-app-3eba.onrender.com";
 
 const ChatRoom = () => {
-  const navigation = useNavigation();
+  const router = useRouter();
   const scrollRef = useRef(null);
   const [message, setMessage] = useState("");
   const params = useLocalSearchParams();
@@ -68,7 +67,7 @@ const ChatRoom = () => {
   useEffect(() => {
     const fetchMessages = async () => {
       try {
-        const token = await AsyncStorage.getItem("auth");
+        const token = await AsyncStorage.getItem("authToken");
         const response = await axios.get(`${API_BASE_URL}/api/messages`, {
           params: {
             senderId: currentUser._id,
@@ -93,7 +92,8 @@ const ChatRoom = () => {
 
   // Navigation header
   useLayoutEffect(() => {
-    navigation.setOptions({
+    // Set header options for Expo Router
+    router.setOptions({
       headerTitle: "",
       headerLeft: () => (
         <View style={styles.headerLeft}>
@@ -101,7 +101,7 @@ const ChatRoom = () => {
             name="arrow-back"
             size={24}
             color="black"
-            onPress={() => navigation.goBack()}
+            onPress={() => router.back()}
           />
           <View style={styles.profileInfo}>
             <Image source={{ uri: params?.image }} style={styles.profileImage} />
@@ -143,9 +143,10 @@ const ChatRoom = () => {
         socket.emit("sendMessage", newMessage);
       }
 
+      const token = await AsyncStorage.getItem("authToken");
       await axios.post(`${API_BASE_URL}/api/messages`, newMessage, {
         headers: {
-          Authorization: `Bearer ${await AsyncStorage.getItem("auth")}`,
+          Authorization: `Bearer ${token}`,
         },
       });
 
@@ -201,7 +202,7 @@ const ChatRoom = () => {
 
       {!canSendMessages ? (
         <SubscribePrompt
-          onSubscribe={() => navigation.navigate("Subscribe")}
+          onSubscribe={() => router.push("/subscribe")}
           message="Subscribe to send messages"
         />
       ) : (

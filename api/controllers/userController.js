@@ -1,774 +1,997 @@
-const User = require("../models/user");
-const mongoose = require("mongoose");
+const User = require('../models/user');
+const Photo = require('../models/photo');
+const Chat = require('../models/Chat');
+const Notification = require('../models/notification');
+const mongoose = require('mongoose');
 const { formatDistanceToNow } = require('date-fns');
-const MAX_FREE_UPLOADS = 7;
 
-// ==================== UTILITY FUNCTIONS ====================
-const isValidId = (id) => mongoose.Types.ObjectId.isValid(String(id || ''));
+// ======================
+// ENHANCED CONFIGURATION
+// ======================
+const isDev = process.env.NODE_ENV === 'development';
+const ONLINE_STATUS_THRESHOLD = 5 * 60 * 1000; // 5 minutes
 
-const safeAccess = (obj, path, fallback = null) => {
-  return path.split('.').reduce((acc, key) => 
-    (acc && typeof acc === 'object' && key in acc) ? acc[key] : fallback, 
-    obj
-  );
-};
-
-const handleError = (error, res) => {
-  console.error("[CONTROLLER ERROR]", error);
+// ======================
+// ENHANCED ERROR HANDLER
+// ======================
+const handleError = (res, error, customMessage = 'Internal server error', code = 'SERVER_ERROR') => {
+  console.error(`[UserController] ${customMessage}:`, error);
 
   if (error instanceof mongoose.Error.ValidationError) {
-    return res.status(400).json({
+    return res.status(400).json({ 
       success: false,
+      code: 'VALIDATION_ERROR',
       message: error.message,
-      systemCode: "VALIDATION_ERROR"
+      errors: error.errors
     });
   }
 
   if (error instanceof mongoose.Error.CastError) {
-    return res.status(400).json({
+    return res.status(400).json({ 
       success: false,
-      message: "Invalid data format",
-      systemCode: "CAST_ERROR"
+      code: 'INVALID_ID',
+      message: 'Invalid ID format'
     });
   }
 
-  if (error.name === "TypeError") {
-    return res.status(500).json({
-      success: false,
-      message: "Data processing error",
-      systemCode: "TYPE_ERROR"
-    });
-  }
-
-  return res.status(500).json({
+  return res.status(500).json({ 
     success: false,
-    message: "Internal server error",
-    systemCode: "SERVER_ERROR",
-    debugInfo: process.env.NODE_ENV === "development" 
-      ? { message: error.message, stack: error.stack } 
-      : undefined
+    code,
+    message: customMessage,
+    error: isDev ? error.message : undefined
   });
 };
 
-// ==================== CONTROLLER METHODS ====================
+// ======================
+// CORE USER CONTROLLERS
+// ======================
 
-// 1. Get Current User Profile (NEW)
-const getMyProfile = async (req, res) => {
-  try {
-    if (!req.user || !isValidId(req.user._id)) {
-      return res.status(401).json({
-        success: false,
-        message: "Authentication required",
-        systemCode: "AUTH_REQUIRED"
-      });
-    }
-
-    const user = await User.findById(new mongoose.Types.ObjectId(req.user._id))
-      .select('-password -__v -verificationToken -resetToken')
-      .populate("crushes", "name profileImages")
-      .populate("matches", "name profileImages")
-      .lean();
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-        systemCode: "USER_NOT_FOUND"
-      });
-    }
-
-    // Safe subscription handling
-    const subscription = user.subscription || {};
-    const isSubscribed = Boolean(subscription.isActive) && 
-      new Date(subscription.expiresAt) > new Date();
-
-    // Construct safe response
-    const responseData = {
-      ...user,
-      _id: String(user._id),
-      name: String(user.name || ''),
-      email: String(user.email || ''),
-      profileImages: (user.profileImages || []).map(img => String(img)),
-      subscriptionStatus: {
-        isActive: isSubscribed,
-        expiresAt: subscription.expiresAt instanceof Date 
-          ? subscription.expiresAt.toISOString() 
-          : null,
-        timeRemaining: isSubscribed 
-          ? formatDistanceToNow(new Date(subscription.expiresAt))
-          : null
-      },
-      crushes: user.crushes || [],
-      matches: user.matches || [],
-      lastActive: user.lastActive instanceof Date
-        ? user.lastActive.toISOString()
-        : null,
-      createdAt: user.createdAt instanceof Date
-        ? user.createdAt.toISOString()
-        : null
-    };
-
-    await User.updateOne(
-      { _id: new mongoose.Types.ObjectId(req.user._id) },
-      { $set: { lastActive: new Date() } }
-    );
-
-    return res.status(200).json({
-      success: true,
-      data: responseData
-    });
-  } catch (error) {
-    handleError(error, res);
-  }
-};
-
-// 2. Process Daily Subscription (KES 10 for 24 hours)
-const processSubscription = async (req, res) => {
-  try {
-    const userId = String(req.params.userId || '');
-    const { amount, paymentMethod } = req.body;
-
-    if (!isValidId(userId)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Invalid user ID",
-        systemCode: "INVALID_USER_ID" 
-      });
-    }
-
-    if (Number(amount) !== 10) {
-      return res.status(400).json({
-        success: false,
-        message: "Daily subscription requires exactly KES 10 payment",
-        systemCode: "INVALID_SUBSCRIPTION_AMOUNT"
-      });
-    }
-
-    const expiresAt = new Date();
-    expiresAt.setHours(expiresAt.getHours() + 24);
-
-    const updatedUser = await User.findByIdAndUpdate(
-      new mongoose.Types.ObjectId(userId),
-      {
-        $set: {
-          subscription: {
-            type: 'daily',
-            isActive: true,
-            expiresAt,
-            paymentMethod: String(paymentMethod || 'M-Pesa'),
-            amount: 10
-          },
-          freeUploadsUsed: 0
-        }
-      },
-      { new: true, runValidators: true }
-    ).select('subscription freeUploadsUsed');
-
-    if (!updatedUser) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "User not found",
-        systemCode: "USER_NOT_FOUND" 
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      message: "KES 10 daily subscription activated (expires in 24 hours)",
-      subscription: updatedUser.subscription,
-      expiresAt: updatedUser.subscription.expiresAt.toISOString(),
-      timeRemaining: formatDistanceToNow(updatedUser.subscription.expiresAt)
-    });
-  } catch (error) {
-    handleError(error, res);
-  }
-};
-
-// 3. Update Gender
-const updateGender = async (req, res) => {
-  try {
-    const userId = String(req.params.userId || '');
-    const { gender } = req.body;
-
-    if (!isValidId(userId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user ID",
-        systemCode: "INVALID_USER_ID"
-      });
-    }
-
-    if (!['male', 'female', 'other'].includes(String(gender || '').toLowerCase())) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid gender value",
-        systemCode: "INVALID_GENDER"
-      });
-    }
-
-    const updatedUser = await User.findByIdAndUpdate(
-      new mongoose.Types.ObjectId(userId),
-      { gender: String(gender).toLowerCase() },
-      { new: true, runValidators: true }
-    ).select('-password -__v');
-
-    if (!updatedUser) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-        systemCode: "USER_NOT_FOUND"
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      message: "Gender updated successfully",
-      data: updatedUser
-    });
-  } catch (error) {
-    handleError(error, res);
-  }
-};
-
-// 4. Update user description
-const updateDescription = async (req, res) => {
-  try {
-    const userId = String(req.params.userId || '');
-    const { description } = req.body;
-
-    if (!description || typeof description !== 'string') {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid description provided",
-        systemCode: "INVALID_DESCRIPTION"
-      });
-    }
-
-    if (description.length > 500) {
-      return res.status(400).json({
-        success: false,
-        message: "Description cannot exceed 500 characters",
-        systemCode: "DESCRIPTION_TOO_LONG"
-      });
-    }
-
-    const updatedUser = await User.findByIdAndUpdate(
-      new mongoose.Types.ObjectId(userId),
-      { $set: { description } },
-      { new: true, runValidators: true }
-    ).select('-password');
-
-    if (!updatedUser) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-        systemCode: "USER_NOT_FOUND"
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      message: "Description updated successfully",
-      user: updatedUser
-    });
-  } catch (error) {
-    handleError(error, res);
-  }
-};
-
-// 5. Get user description
-const getDescription = async (req, res) => {
-  try {
-    const userId = String(req.params.userId || '');
-    
-    if (!isValidId(userId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user ID",
-        systemCode: "INVALID_USER_ID"
-      });
-    }
-
-    const user = await User.findById(new mongoose.Types.ObjectId(userId))
-      .select('description')
-      .lean();
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-        systemCode: "USER_NOT_FOUND"
-      });
-    }
-
-    res.json({
-      success: true,
-      description: String(user.description || '')
-    });
-  } catch (error) {
-    handleError(error, res);
-  }
-};
-
-// 6. Add profile images with subscription check
-const addProfileImages = async (req, res) => {
-  try {
-    const userId = String(req.params.userId || '');
-    const imageUrls = Array.isArray(req.uploadedImageUrls) 
-      ? req.uploadedImageUrls 
-      : Array.isArray(req.body.profileImages) 
-        ? req.body.profileImages 
-        : [];
-
-    if (!isValidId(userId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user ID",
-        systemCode: "INVALID_USER_ID"
-      });
-    }
-
-    if (imageUrls.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "No valid images provided",
-        systemCode: "NO_IMAGES"
-      });
-    }
-
-    const user = await User.findById(new mongoose.Types.ObjectId(userId))
-      .select('subscription freeUploadsUsed profileImages')
-      .lean();
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-        systemCode: "USER_NOT_FOUND"
-      });
-    }
-
-    const subscription = user.subscription || {};
-    const hasActiveSubscription = Boolean(subscription.isActive) && 
-      new Date(subscription.expiresAt) > new Date();
-    const freeUploadsUsed = Number(user.freeUploadsUsed) || 0;
-    const remainingFreeSlots = MAX_FREE_UPLOADS - freeUploadsUsed;
-
-    if (!hasActiveSubscription && (freeUploadsUsed + imageUrls.length > MAX_FREE_UPLOADS)) {
-      return res.status(403).json({
-        success: false,
-        message: `Free users can upload max ${MAX_FREE_UPLOADS} photos (${remainingFreeSlots} remaining). Subscribe for KES 10 to unlock unlimited uploads for 24 hours.`,
-        remainingSlots: remainingFreeSlots,
-        systemCode: "UPLOAD_LIMIT_EXCEEDED",
-        upgradeRequired: true
-      });
-    }
-
-    const update = {
-      $addToSet: { profileImages: { $each: imageUrls.map(img => String(img)) } },
-      $set: { lastActive: new Date() }
-    };
-
-    if (!hasActiveSubscription) {
-      update.$inc = { freeUploadsUsed: imageUrls.length };
-    }
-
-    const updatedUser = await User.findByIdAndUpdate(
-      new mongoose.Types.ObjectId(userId),
-      update,
-      { new: true }
-    ).select("profileImages freeUploadsUsed subscription");
-
-    res.status(200).json({
-      success: true,
-      profileImages: updatedUser.profileImages.map(img => String(img)),
-      uploadsRemaining: hasActiveSubscription
-        ? 'Unlimited'
-        : MAX_FREE_UPLOADS - updatedUser.freeUploadsUsed,
-      subscriptionStatus: {
-        isActive: hasActiveSubscription,
-        expiresAt: updatedUser.subscription?.expiresAt instanceof Date
-          ? updatedUser.subscription.expiresAt.toISOString()
-          : null
-      }
-    });
-  } catch (error) {
-    handleError(error, res);
-  }
-};
-
-// 7. Get user profile (Fully Hardened)
+/**
+ * Get enhanced user profile with online status
+ */
 const getProfile = async (req, res) => {
   try {
-    const userId = String(req.params.userId || '');
-    
-    if (!isValidId(userId)) {
-      return res.status(400).json({
+    // Verify that the requested user is the authenticated user
+    if (req.params.userId !== req.user._id.toString()) {
+      return res.status(403).json({
         success: false,
-        message: "Invalid user ID format",
-        systemCode: "INVALID_USER_ID"
+        code: 'UNAUTHORIZED_ACCESS',
+        message: 'You can only access your own profile'
       });
     }
 
-    const user = await User.findById(new mongoose.Types.ObjectId(userId))
-      .select('-password -__v -verificationToken -resetToken')
-      .populate("crushes", "name profileImages")
-      .populate("matches", "name profileImages")
+    const user = await User.findById(req.params.userId)
+      .select('-password -refreshToken -failedLoginAttempts -activeSessions')
       .lean();
 
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: "User not found",
-        systemCode: "USER_NOT_FOUND"
+        code: 'USER_NOT_FOUND',
+        message: 'User not found'
       });
     }
 
-    // Safe subscription handling
-    const subscription = user.subscription || {};
-    const isSubscribed = Boolean(subscription.isActive) && 
-      new Date(subscription.expiresAt) > new Date();
-
-    // Safe profile images
-    const visiblePhotos = isSubscribed 
-      ? user.profileImages || []
-      : (user.profileImages || []).slice(0, MAX_FREE_UPLOADS);
-
-    // Construct safe response
-    const responseData = {
+    // Enhanced status information
+    const enhancedProfile = {
       ...user,
-      _id: String(user._id),
-      name: String(user.name || ''),
-      email: String(user.email || ''),
-      profileImages: visiblePhotos.map(img => String(img)),
-      subscriptionStatus: {
-        isActive: isSubscribed,
-        expiresAt: subscription.expiresAt instanceof Date 
-          ? subscription.expiresAt.toISOString() 
-          : null,
-        timeRemaining: isSubscribed 
-          ? formatDistanceToNow(new Date(subscription.expiresAt))
-          : null,
-        isRequired: !isSubscribed && (user.profileImages?.length || 0) > MAX_FREE_UPLOADS,
-        canViewAll: isSubscribed,
-        remainingPhotos: isSubscribed 
-          ? 0 
-          : Math.max(0, (user.profileImages?.length || 0) - MAX_FREE_UPLOADS)
-      },
-      crushes: user.crushes || [],
-      matches: user.matches || [],
-      lastActive: user.lastActive instanceof Date
-        ? user.lastActive.toISOString()
-        : null,
-      createdAt: user.createdAt instanceof Date
-        ? user.createdAt.toISOString()
-        : null
+      status: {
+        isOnline: user.isOnline,
+        lastActive: user.lastActive,
+        lastSeen: user.isOnline ? 'online' : `last seen ${formatDistanceToNow(user.lastActive)} ago`
+      }
     };
 
-    await User.updateOne(
-      { _id: new mongoose.Types.ObjectId(userId) },
-      { $set: { lastActive: new Date() } }
-    );
-
     return res.status(200).json({
       success: true,
-      data: responseData
+      data: enhancedProfile
     });
   } catch (error) {
-    handleError(error, res);
+    return handleError(res, error, 'Error fetching profile');
   }
 };
 
-// 8. Handle user likes
-const handleLike = async (req, res) => {
+/**
+ * Update profile with validation
+ */
+const updateProfile = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  
   try {
-    const userId = String(req.params.userId || '');
-    const likerId = String(req.user._id || '');
+    // Verify ownership
+    if (req.params.userId !== req.user._id.toString()) {
+      await session.abortTransaction();
+      return res.status(403).json({
+        success: false,
+        code: 'UNAUTHORIZED_ACCESS',
+        message: 'You can only update your own profile'
+      });
+    }
 
-    if (!isValidId(userId)) {
+    const { name, bio, age, gender, preferences } = req.body;
+    const updates = {};
+
+    // Validate and build update object
+    if (name) updates.name = name;
+    if (bio) updates.bio = bio;
+    if (age) {
+      if (age < 18 || age > 100) {
+        await session.abortTransaction();
+        return res.status(400).json({
+          success: false,
+          code: 'INVALID_AGE',
+          message: 'Age must be between 18 and 100'
+        });
+      }
+      updates.age = age;
+    }
+    if (gender) updates.gender = gender;
+    if (preferences) updates.preferences = preferences;
+
+    const user = await User.findByIdAndUpdate(
+      req.params.userId,
+      updates,
+      { new: true, runValidators: true, session }
+    ).select('-password');
+
+    await session.commitTransaction();
+
+    // Broadcast profile update to connections
+    if (global.io) {
+      global.io.to(`user-${user._id}`).emit('profile-updated', {
+        userId: user._id,
+        updates
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Profile updated successfully',
+      data: user
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    return handleError(res, error, 'Error updating profile');
+  } finally {
+    session.endSession();
+  }
+};
+
+// ======================
+// SUBSCRIPTION HANDLERS
+// ======================
+
+/**
+ * Handle user subscription
+ */
+const subscribe = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    // Verify ownership
+    if (req.params.userId !== req.user._id.toString()) {
+      await session.abortTransaction();
+      return res.status(403).json({
+        success: false,
+        code: 'UNAUTHORIZED_ACCESS',
+        message: 'You can only subscribe for your own account'
+      });
+    }
+
+    const { plan, paymentMethod } = req.body;
+    
+    // Validate subscription plan
+    const validPlans = ['monthly', 'yearly', 'premium'];
+    if (!validPlans.includes(plan)) {
+      await session.abortTransaction();
       return res.status(400).json({
         success: false,
-        message: "Invalid user ID",
-        systemCode: "INVALID_USER_ID"
+        code: 'INVALID_PLAN',
+        message: 'Invalid subscription plan'
       });
     }
 
-    const likedUser = await User.findByIdAndUpdate(
-      new mongoose.Types.ObjectId(userId),
-      { $addToSet: { likesReceived: new mongoose.Types.ObjectId(likerId) } },
-      { new: true }
+    // Calculate expiry date
+    const expiryDate = new Date();
+    if (plan === 'monthly') expiryDate.setMonth(expiryDate.getMonth() + 1);
+    else if (plan === 'yearly') expiryDate.setFullYear(expiryDate.getFullYear() + 1);
+    else if (plan === 'premium') expiryDate.setFullYear(expiryDate.getFullYear() + 5);
+
+    // Update user subscription
+    const updatedUser = await User.findByIdAndUpdate(
+      req.params.userId,
+      {
+        subscription: {
+          isActive: true,
+          plan,
+          startDate: new Date(),
+          expiryDate,
+          paymentMethod
+        }
+      },
+      { new: true, session }
     );
 
-    if (!likedUser) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-        systemCode: "USER_NOT_FOUND"
+    await session.commitTransaction();
+
+    // Send subscription confirmation
+    if (global.io) {
+      global.io.to(`user-${req.params.userId}`).emit('subscription-updated', {
+        status: 'active',
+        plan
       });
     }
-
-    const hasActiveSubscription = req.user.subscription?.isActive &&
-      new Date(req.user.subscription.expiresAt) > new Date();
-
-    await User.findByIdAndUpdate(likedUser._id, {
-      $push: {
-        notifications: {
-          type: 'new_like',
-          from: new mongoose.Types.ObjectId(likerId),
-          message: `${req.user.username} liked your profile`,
-          requiresSubscription: !hasActiveSubscription,
-          read: false,
-          createdAt: new Date()
-        }
-      }
-    });
 
     return res.status(200).json({
       success: true,
-      message: "Like recorded successfully",
-      canMessage: hasActiveSubscription
+      message: 'Subscription successful',
+      data: {
+        subscription: updatedUser.subscription
+      }
     });
   } catch (error) {
-    handleError(error, res);
+    await session.abortTransaction();
+    return handleError(res, error, 'Error processing subscription');
+  } finally {
+    session.endSession();
   }
 };
 
-// 9. Get subscription status
+/**
+ * Get user subscription status
+ */
 const getSubscriptionStatus = async (req, res) => {
   try {
-    if (!req.user || !isValidId(req.user._id)) {
-      return res.status(401).json({
+    // Verify ownership
+    if (req.params.userId !== req.user._id.toString()) {
+      return res.status(403).json({
         success: false,
-        message: "Authentication required",
-        systemCode: "AUTH_REQUIRED"
+        code: 'UNAUTHORIZED_ACCESS',
+        message: 'You can only check your own subscription status'
       });
     }
 
-    const user = await User.findById(new mongoose.Types.ObjectId(req.user._id))
-      .select("subscription freeUploadsUsed profileImages")
-      .lean();
+    const user = await User.findById(req.params.userId)
+      .select('subscription');
 
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: "User not found",
-        systemCode: "USER_NOT_FOUND"
+        code: 'USER_NOT_FOUND',
+        message: 'User not found'
       });
     }
-
-    const subscription = user.subscription || {};
-    const isActive = Boolean(subscription.isActive) && 
-      new Date(subscription.expiresAt) > new Date();
 
     return res.status(200).json({
       success: true,
       data: {
-        isActive,
-        expiresAt: subscription.expiresAt instanceof Date
-          ? subscription.expiresAt.toISOString()
-          : null,
-        timeRemaining: isActive
-          ? formatDistanceToNow(new Date(subscription.expiresAt))
-          : null,
-        freeUploadsUsed: Number(user.freeUploadsUsed) || 0,
-        freeUploadsRemaining: Math.max(0, MAX_FREE_UPLOADS - (Number(user.freeUploadsUsed) || 0)),
-        totalPhotos: Array.isArray(user.profileImages) ? user.profileImages.length : 0,
-        canUploadMore: isActive || (Number(user.freeUploadsUsed) || 0) < MAX_FREE_UPLOADS,
-        canMessage: isActive,
-        canViewAllPhotos: isActive,
-        subscriptionType: String(subscription.type || 'none')
+        subscription: user.subscription || { isActive: false }
       }
     });
   } catch (error) {
-    handleError(error, res);
+    return handleError(res, error, 'Error fetching subscription status');
   }
 };
 
-// 10. Get notifications
-const getNotifications = async (req, res) => {
+// ======================
+// USER INTERACTIONS
+// ======================
+
+/**
+ * Like another user
+ */
+const likeUser = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    if (!req.user || !isValidId(req.user._id)) {
-      return res.status(401).json({
+    const { targetUserId } = req.body;
+    const currentUserId = req.user._id;
+
+    // Prevent self-liking
+    if (currentUserId.toString() === targetUserId) {
+      await session.abortTransaction();
+      return res.status(400).json({
         success: false,
-        message: "Authentication required",
-        systemCode: "AUTH_REQUIRED"
+        code: 'SELF_LIKE',
+        message: 'You cannot like yourself'
       });
     }
 
-    const user = await User.findById(new mongoose.Types.ObjectId(req.user._id))
-      .select("notifications")
-      .populate("notifications.from", "username profileImages")
-      .sort({ "notifications.createdAt": -1 })
-      .lean();
+    // Check if already liked
+    const alreadyLiked = await User.exists({
+      _id: currentUserId,
+      likedUsers: targetUserId
+    });
 
-    if (!user) {
+    // Toggle like status
+    const updateCurrentUser = alreadyLiked
+      ? { $pull: { likedUsers: targetUserId } }
+      : { $addToSet: { likedUsers: targetUserId } };
+
+    const updateTargetUser = alreadyLiked
+      ? { $pull: { likedBy: currentUserId } }
+      : { $addToSet: { likedBy: currentUserId } };
+
+    await Promise.all([
+      User.findByIdAndUpdate(currentUserId, updateCurrentUser, { session }),
+      User.findByIdAndUpdate(targetUserId, updateTargetUser, { session })
+    ]);
+
+    // Create notification if liking (not unliking)
+    if (!alreadyLiked) {
+      const currentUser = await User.findById(currentUserId).session(session);
+      
+      await Notification.create([{
+        user: targetUserId,
+        from: currentUserId,
+        type: 'user_like',
+        message: `${currentUser.name} liked your profile`,
+        data: {
+          likerName: currentUser.name,
+          likerId: currentUserId
+        }
+      }], { session });
+
+      // Real-time update
+      if (global.io) {
+        global.io.to(`user-${targetUserId}`).emit('user-liked', {
+          userId: currentUserId,
+          userName: currentUser.name
+        });
+      }
+    }
+
+    await session.commitTransaction();
+
+    return res.status(200).json({
+      success: true,
+      message: alreadyLiked ? 'User unliked' : 'User liked',
+      data: {
+        isLiked: !alreadyLiked
+      }
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    return handleError(res, error, 'Error processing like');
+  } finally {
+    session.endSession();
+  }
+};
+
+/**
+ * Update user preferences
+ */
+const updatePreferences = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    // Verify ownership
+    if (req.params.userId !== req.user._id.toString()) {
+      await session.abortTransaction();
+      return res.status(403).json({
+        success: false,
+        code: 'UNAUTHORIZED_ACCESS',
+        message: 'You can only update your own preferences'
+      });
+    }
+
+    const { genderPreference, ageRange, distance } = req.body;
+    const updates = {};
+
+    // Validate and build updates
+    if (genderPreference) updates['preferences.gender'] = genderPreference;
+    if (ageRange) {
+      if (ageRange.min < 18 || ageRange.max > 100) {
+        await session.abortTransaction();
+        return res.status(400).json({
+          success: false,
+          code: 'INVALID_AGE_RANGE',
+          message: 'Age range must be between 18 and 100'
+        });
+      }
+      updates['preferences.ageRange'] = ageRange;
+    }
+    if (distance) updates['preferences.distance'] = distance;
+
+    const updatedUser = await User.findByIdAndUpdate(
+      req.params.userId,
+      { $set: updates },
+      { new: true, session }
+    );
+
+    await session.commitTransaction();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Preferences updated successfully',
+      data: {
+        preferences: updatedUser.preferences
+      }
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    return handleError(res, error, 'Error updating preferences');
+  } finally {
+    session.endSession();
+  }
+};
+
+// ======================
+// ACCOUNT MANAGEMENT
+// ======================
+
+/**
+ * Delete user account
+ */
+const deleteAccount = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    // Verify ownership
+    if (req.params.userId !== req.user._id.toString()) {
+      await session.abortTransaction();
+      return res.status(403).json({
+        success: false,
+        code: 'UNAUTHORIZED_ACCESS',
+        message: 'You can only delete your own account'
+      });
+    }
+
+    // Soft delete by marking as inactive
+    const deletedUser = await User.findByIdAndUpdate(
+      req.params.userId,
+      { isActive: false, deletedAt: new Date() },
+      { new: true, session }
+    );
+
+    // Remove from other users' liked lists
+    await User.updateMany(
+      { likedUsers: req.params.userId },
+      { $pull: { likedUsers: req.params.userId } },
+      { session }
+    );
+
+    await session.commitTransaction();
+
+    // Notify connected clients
+    if (global.io) {
+      global.io.to(`user-${req.params.userId}`).emit('account-deleted');
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Account deleted successfully'
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    return handleError(res, error, 'Error deleting account');
+  } finally {
+    session.endSession();
+  }
+};
+
+// ======================
+// PHOTO MANAGEMENT
+// ======================
+
+/**
+ * Upload profile photo
+ */
+const uploadPhoto = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    // Verify ownership
+    if (req.params.userId !== req.user._id.toString()) {
+      await session.abortTransaction();
+      return res.status(403).json({
+        success: false,
+        code: 'UNAUTHORIZED_ACCESS',
+        message: 'You can only upload photos to your own profile'
+      });
+    }
+
+    const { url, publicId } = req.body;
+    
+    if (!url || !publicId) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        code: 'MISSING_FIELDS',
+        message: 'Photo URL and public ID are required'
+      });
+    }
+
+    const newPhoto = {
+      url,
+      publicId,
+      uploadedAt: new Date(),
+      likes: 0,
+      likedBy: []
+    };
+
+    const updatedUser = await User.findByIdAndUpdate(
+      req.params.userId,
+      { $push: { profileImages: newPhoto } },
+      { new: true, session }
+    );
+
+    await session.commitTransaction();
+
+    return res.status(201).json({
+      success: true,
+      message: 'Photo uploaded successfully',
+      data: {
+        photos: updatedUser.profileImages,
+        count: updatedUser.profileImages.length
+      }
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    return handleError(res, error, 'Error uploading photo');
+  } finally {
+    session.endSession();
+  }
+};
+
+/**
+ * Delete profile photo
+ */
+const deletePhoto = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    // Verify ownership
+    if (req.params.userId !== req.user._id.toString()) {
+      await session.abortTransaction();
+      return res.status(403).json({
+        success: false,
+        code: 'UNAUTHORIZED_ACCESS',
+        message: 'You can only delete your own photos'
+      });
+    }
+
+    const { photoId } = req.params;
+    
+    const updatedUser = await User.findByIdAndUpdate(
+      req.params.userId,
+      { $pull: { profileImages: { _id: photoId } } },
+      { new: true, session }
+    );
+
+    await session.commitTransaction();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Photo deleted successfully',
+      data: {
+        photos: updatedUser.profileImages,
+        count: updatedUser.profileImages.length
+      }
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    return handleError(res, error, 'Error deleting photo');
+  } finally {
+    session.endSession();
+  }
+};
+
+// ======================
+// PHOTO FEED & INTERACTIONS
+// ======================
+
+/**
+ * Get enhanced photo feed with online status
+ */
+const getAllUserPhotos = async (req, res) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const skip = (page - 1) * limit;
+
+    // Get all users with their photos
+    const users = await User.find({ _id: { $ne: req.user._id } })
+      .select('name age gender profileImages subscription isOnline lastActive')
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    // Transform into feed format
+    const feed = users.flatMap(user => 
+      user.profileImages.map(photo => ({
+        photoId: photo._id,
+        url: photo.url,
+        likes: photo.likes || 0,
+        isLiked: photo.likedBy?.includes(req.user._id) || false,
+        owner: {
+          id: user._id,
+          name: user.name,
+          age: user.age,
+          gender: user.gender,
+          isSubscribed: user.subscription?.isActive || false,
+          status: user.isOnline ? 'online' : `last seen ${formatDistanceToNow(user.lastActive)} ago`
+        },
+        canChat: req.user.subscription?.isActive || false,
+        uploadedAt: photo.uploadedAt
+      }))
+    ).sort((a, b) => b.uploadedAt - a.uploadedAt);
+
+    const total = await User.countDocuments({ _id: { $ne: req.user._id } });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        feed,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: Math.ceil(total / limit),
+          totalItems: total,
+          itemsPerPage: parseInt(limit)
+        }
+      }
+    });
+  } catch (error) {
+    return handleError(res, error, 'Error fetching photo feed');
+  }
+};
+
+/**
+ * Like/unlike a photo with real-time updates
+ */
+const likePhoto = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { photoId, ownerId } = req.body;
+    
+    // Prevent self-liking
+    if (ownerId === req.user._id.toString()) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        code: 'SELF_LIKE',
+        message: 'You cannot like your own photo'
+      });
+    }
+
+    // Validate photo exists
+    const photoOwner = await User.findOne({
+      _id: ownerId,
+      'profileImages._id': photoId
+    }).session(session);
+
+    if (!photoOwner) {
+      await session.abortTransaction();
       return res.status(404).json({
         success: false,
-        message: "User not found",
-        systemCode: "USER_NOT_FOUND"
+        code: 'PHOTO_NOT_FOUND',
+        message: 'Photo or owner not found'
       });
     }
 
-    const safeNotifications = (user.notifications || []).map(notification => ({
-      ...notification,
-      _id: String(notification._id),
-      from: notification.from ? {
-        _id: String(notification.from._id),
-        username: String(notification.from.username || ''),
-        profileImages: (notification.from.profileImages || []).map(img => String(img))
-      } : null,
-      message: String(notification.message || ''),
-      createdAt: notification.createdAt instanceof Date
-        ? notification.createdAt.toISOString()
-        : null
+    // Check current like status
+    const photo = photoOwner.profileImages.id(photoId);
+    const alreadyLiked = photo.likedBy.includes(req.user._id);
+
+    // Toggle like status
+    const update = alreadyLiked
+      ? {
+          $inc: { 'profileImages.$.likes': -1 },
+          $pull: { 'profileImages.$.likedBy': req.user._id }
+        }
+      : {
+          $inc: { 'profileImages.$.likes': 1 },
+          $addToSet: { 'profileImages.$.likedBy': req.user._id }
+        };
+
+    await User.updateOne(
+      { _id: ownerId, 'profileImages._id': photoId },
+      update,
+      { session }
+    );
+
+    // Update liker's profile
+    const userUpdate = alreadyLiked
+      ? { $pull: { likedPhotos: { photoId, ownerId } } }
+      : { $addToSet: { likedPhotos: { photoId, ownerId } } };
+
+    await User.findByIdAndUpdate(
+      req.user._id,
+      userUpdate,
+      { session }
+    );
+
+    // Create notification if liking (not unliking)
+    if (!alreadyLiked) {
+      await Notification.create([{
+        user: ownerId,
+        from: req.user._id,
+        type: 'photo_like',
+        message: `${req.user.name} liked your photo`,
+        photo: photoId,
+        data: {
+          photoUrl: photo.url,
+          likerName: req.user.name,
+          likerId: req.user._id
+        }
+      }], { session });
+
+      // Real-time update
+      if (global.io) {
+        global.io.to(`user-${ownerId}`).emit('photo-liked', {
+          photoId,
+          likerId: req.user._id,
+          likerName: req.user.name,
+          newLikeCount: photo.likes + 1
+        });
+      }
+    }
+
+    await session.commitTransaction();
+
+    return res.status(200).json({
+      success: true,
+      message: alreadyLiked ? 'Photo unliked' : 'Photo liked',
+      data: {
+        photoId,
+        isLiked: !alreadyLiked,
+        newLikeCount: alreadyLiked ? photo.likes - 1 : photo.likes + 1
+      }
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    return handleError(res, error, 'Error processing like');
+  } finally {
+    session.endSession();
+  }
+};
+
+// ======================
+// CHAT INITIATION
+// ======================
+
+/**
+ * Start chat from photo with enhanced validation
+ */
+const startChatFromPhoto = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { photoId, targetUserId } = req.body;
+    const currentUserId = req.user._id;
+
+    // Prevent self-chatting
+    if (targetUserId === currentUserId.toString()) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        code: 'SELF_CHAT',
+        message: 'You cannot start a chat with yourself'
+      });
+    }
+
+    // Validate users and photo
+    const [currentUser, targetUser] = await Promise.all([
+      User.findById(currentUserId).session(session),
+      User.findOne({
+        _id: targetUserId,
+        'profileImages._id': photoId
+      }).session(session)
+    ]);
+
+    if (!targetUser) {
+      await session.abortTransaction();
+      return res.status(404).json({
+        success: false,
+        code: 'PHOTO_NOT_FOUND',
+        message: 'Photo or owner not found'
+      });
+    }
+
+    // Check for existing chat
+    let chat = await Chat.findOne({
+      participants: { $all: [currentUserId, targetUserId] },
+      photoContext: photoId
+    }).session(session);
+
+    if (!chat) {
+      // Create new chat with photo context
+      chat = await Chat.create([{
+        participants: [currentUserId, targetUserId],
+        photoContext: photoId,
+        messages: [{
+          sender: currentUserId,
+          content: `I saw your photo and wanted to chat!`,
+          isRead: false,
+          sentAt: new Date()
+        }],
+        createdAt: new Date()
+      }], { session });
+
+      // Create notification
+      await Notification.create([{
+        user: targetUserId,
+        from: currentUserId,
+        type: 'chat_initiated',
+        message: `${currentUser.name} started a chat about your photo`,
+        chat: chat[0]._id,
+        photo: photoId,
+        data: {
+          photoUrl: targetUser.profileImages.id(photoId).url,
+          senderName: currentUser.name,
+          senderPhoto: currentUser.profileImages[0]?.url || null
+        }
+      }], { session });
+
+      // Real-time notification
+      if (global.io) {
+        global.io.to(`user-${targetUserId}`).emit('new-chat', {
+          chatId: chat[0]._id,
+          fromUserId: currentUserId,
+          fromUserName: currentUser.name,
+          photoId,
+          previewMessage: 'I saw your photo and wanted to chat!'
+        });
+      }
+    }
+
+    await session.commitTransaction();
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        chatId: chat._id,
+        requiresSubscription: !currentUser.subscription?.isActive,
+        canChat: targetUser.subscription?.isActive
+      }
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    return handleError(res, error, 'Error initiating chat');
+  } finally {
+    session.endSession();
+  }
+};
+
+// ======================
+// NOTIFICATIONS
+// ======================
+
+/**
+ * Get paginated notifications with enhanced data
+ */
+const getNotifications = async (req, res) => {
+  try {
+    // Verify ownership
+    if (req.params.userId !== req.user._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        code: 'UNAUTHORIZED_ACCESS',
+        message: 'You can only access your own notifications'
+      });
+    }
+
+    const { page = 1, limit = 20, unreadOnly } = req.query;
+    const skip = (page - 1) * limit;
+
+    const filter = { user: req.user._id };
+    if (unreadOnly === 'true') filter.read = false;
+
+    const [notifications, total] = await Promise.all([
+      Notification.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .populate('from', 'name profileImages isOnline lastActive')
+        .lean(),
+      Notification.countDocuments(filter)
+    ]);
+
+    // Enhance with status information
+    const enhancedNotifications = notifications.map(notif => ({
+      ...notif,
+      from: notif.from ? {
+        ...notif.from,
+        status: notif.from.isOnline ? 'online' : `last seen ${formatDistanceToNow(notif.from.lastActive)} ago`
+      } : null
     }));
 
     return res.status(200).json({
       success: true,
-      notifications: safeNotifications
+      data: {
+        notifications: enhancedNotifications,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: Math.ceil(total / limit),
+          totalItems: total,
+          itemsPerPage: parseInt(limit)
+        }
+      }
     });
   } catch (error) {
-    handleError(error, res);
+    return handleError(res, error, 'Error fetching notifications');
   }
 };
 
-// 11. Mark notification as read
-const markNotificationRead = async (req, res) => {
-  try {
-    const notificationId = String(req.params.notificationId || '');
+/**
+ * Mark notifications as read with real-time update
+ */
+const markNotificationsAsRead = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
-    if (!isValidId(notificationId)) {
-      return res.status(400).json({
+  try {
+    // Verify ownership
+    if (req.params.userId !== req.user._id.toString()) {
+      await session.abortTransaction();
+      return res.status(403).json({
         success: false,
-        message: "Invalid notification ID",
-        systemCode: "INVALID_NOTIFICATION_ID"
+        code: 'UNAUTHORIZED_ACCESS',
+        message: 'You can only update your own notifications'
       });
     }
 
-    const result = await User.updateOne(
-      { 
-        _id: new mongoose.Types.ObjectId(req.user._id),
-        "notifications._id": new mongoose.Types.ObjectId(notificationId)
-      },
-      { $set: { "notifications.$.read": true } }
+    const result = await Notification.updateMany(
+      { user: req.user._id, read: false },
+      { $set: { read: true, readAt: new Date() } },
+      { session }
     );
 
-    if (result.modifiedCount === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Notification not found or already read",
-        systemCode: "NOTIFICATION_NOT_FOUND"
+    await session.commitTransaction();
+
+    // Real-time update
+    if (global.io && result.modifiedCount > 0) {
+      global.io.to(`user-${req.user._id}`).emit('notifications-read', {
+        count: result.modifiedCount
       });
     }
 
     return res.status(200).json({
       success: true,
-      message: "Notification marked as read"
+      message: `${result.modifiedCount} notifications marked as read`
     });
   } catch (error) {
-    handleError(error, res);
+    await session.abortTransaction();
+    return handleError(res, error, 'Error marking notifications as read');
+  } finally {
+    session.endSession();
   }
 };
 
-// 12. Update user preferences
-const updatePreferences = async (req, res) => {
-  try {
-    const { preferences } = req.body;
+// ======================
+// EXPORTS
+// ======================
 
-    if (!preferences || typeof preferences !== 'object') {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid preferences format",
-        systemCode: "INVALID_PREFERENCES"
-      });
-    }
-
-    const updatedUser = await User.findByIdAndUpdate(
-      new mongoose.Types.ObjectId(req.user._id),
-      { $set: { preferences } },
-      { new: true }
-    ).select("preferences");
-
-    return res.status(200).json({
-      success: true,
-      data: updatedUser.preferences
-    });
-  } catch (error) {
-    handleError(error, res);
-  }
-};
-
-// 13. Send message
-const sendMessage = async (req, res) => {
-  try {
-    const { recipientId, content } = req.body;
-    const senderId = req.user._id;
-
-    // Implement your messaging logic here (e.g., saving to a messages collection)
-    // For now we return a placeholder response.
-    return res.status(200).json({
-      success: true,
-      message: `Message sent from ${senderId} to ${recipientId}`,
-      content
-    });
-  } catch (error) {
-    console.error("sendMessage error:", error);
-    return res.status(500).json({ success: false, error: "Failed to send message" });
-  }
-};
-
-// 14. Get conversation between two users
-const getConversation = async (req, res) => {
-  try {
-    const { recipientId } = req.params;
-    const senderId = req.user._id;
-
-    // Implement your conversation retrieval logic here.
-    // This is a placeholder response.
-    return res.status(200).json({
-      success: true,
-      conversation: [],
-      message: `Conversation between ${senderId} and ${recipientId}`
-    });
-  } catch (error) {
-    console.error("getConversation error:", error);
-    return res.status(500).json({ success: false, error: "Failed to retrieve conversation" });
-  }
-};
-
-// 15. Delete user account
-const deleteUserAccount = async (req, res) => {
-  try {
-    const { userId } = req.params;
-
-    // Implement account deletion logic here (e.g., remove user and related data)
-    // Placeholder response:
-    return res.status(200).json({
-      success: true,
-      message: `User account ${userId} deleted`
-    });
-  } catch (error) {
-    console.error("deleteUserAccount error:", error);
-    return res.status(500).json({ success: false, error: "Failed to delete account" });
-  }
-};
-
-// Export all methods
 module.exports = {
-  getMyProfile, // Added the new endpoint
-  processSubscription,
-  updateGender,
-  updateDescription,
-  getDescription,
-  addProfileImages,
-  getProfile,
-  handleLike,
+  // Profile Management
+  getUserProfile: getProfile,
+  updateProfile: updateProfile,
+  uploadProfileImage: uploadPhoto,
+  deleteProfileImage: deletePhoto,
+
+  // Subscription
+  subscribe,
   getSubscriptionStatus,
-  getNotifications,
-  markNotificationRead,
+
+  // Interactions
+  likeUser,
   updatePreferences,
-  sendMessage,
-  getConversation,
-  deleteUserAccount,
-  handleError
+  deleteAccount,
+
+  // Photo Feed
+  getAllUserPhotos: getAllUserPhotos,
+  likePhoto,
+  startChatFromPhoto,
+
+  // Notifications
+  getNotifications,
+  markNotificationsAsRead
 };

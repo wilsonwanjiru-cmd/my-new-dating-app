@@ -1,164 +1,127 @@
 // app/(tabs)/bio/index.js
+// app/(tabs)/bio/index.js
+import React, { useState, useEffect, useCallback, useContext } from "react";
 import {
   StyleSheet,
   Text,
   View,
-  ScrollView,
   Image,
   Pressable,
   Alert,
   ActivityIndicator,
   TouchableOpacity,
-  Modal,
-  TextInput
+  RefreshControl,
+  FlatList
 } from "react-native";
-import React, { useState, useEffect } from "react";
-import { Entypo, AntDesign } from "@expo/vector-icons";
-import * as ImagePicker from 'expo-image-picker';
-import Carousel from "react-native-reanimated-carousel";
-import { useAuth } from "../../_context/AuthContext";
+import { Entypo, AntDesign, MaterialIcons } from "@expo/vector-icons";
+import { useAuth } from "../../../src/_context/AuthContext";
 import { useRouter } from "expo-router";
-import apiClient from "../../_api/client";
+import { useSocket } from "../../../src/_context/SocketContext";
+import { likePhoto, getFeedPhotos } from "../../../src/_api/photos";
 
 const BioScreen = () => {
   const router = useRouter();
-  const { 
-    user, 
-    isSubscribed,
-    subscriptionExpiresAt,
-    freePhotosViewed,
-    freePhotosLimit,
-    incrementPhotoView,
-    canViewMorePhotos,
-    updateUser
-  } = useAuth();
+  const { user, isSubscribed, startChat } = useAuth();
+  const { onlineUsers } = useSocket();
   
-  const [option, setOption] = useState("Photos");
-  const [description, setDescription] = useState(user?.description || "");
-  const [activeSlide, setActiveSlide] = useState(0);
-  const [selectedTurnOns, setSelectedTurnOns] = useState(user?.turnOns || []);
-  const [lookingOptions, setLookingOptions] = useState(user?.lookingFor || []);
-  const [showGenderModal, setShowGenderModal] = useState(false);
-  const [selectedGender, setSelectedGender] = useState(user?.gender || "");
-  const [updatingGender, setUpdatingGender] = useState(false);
-  const [updatingDescription, setUpdatingDescription] = useState(false);
-  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [photos, setPhotos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
 
-  // Initialize state from user data
+  // Fetch photos based on gender preference
+  const fetchPhotos = useCallback(async (pageNum = 1) => {
+    try {
+      if (!user?.gender) return;
+      
+      setLoading(true);
+      const oppositeGender = user.gender === "male" ? "female" : "male";
+      const response = await getFeedPhotos(oppositeGender);
+      
+      if (pageNum === 1) {
+        setPhotos(response.data);
+      } else {
+        setPhotos(prev => [...prev, ...response.data]);
+      }
+      
+      setHasMore(response.data.length > 0);
+      setPage(pageNum);
+    } catch (error) {
+      console.error("Error fetching photos:", error);
+      Alert.alert("Error", "Failed to load photos. Please try again.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [user?.gender]);
+
+  // Initial load
   useEffect(() => {
-    if (user) {
-      setDescription(user.description || "");
-      setSelectedGender(user.gender || "");
-      setSelectedTurnOns(user.turnOns || []);
-      setLookingOptions(user.lookingFor || []);
-    }
-  }, [user]);
+    fetchPhotos();
+  }, [fetchPhotos]);
 
-  // Constants
-  const MAX_FREE_PHOTOS = 7;
-  const turnons = [
-    { id: "0", name: "Music", description: "Pop Rock-Indie pick our sound track" },
-    { id: "1", name: "Fantasies", description: "Can be deeply personal and romantic" },
-    { id: "2", name: "Nibbling", description: "Playful form of gentle bites" },
-    { id: "3", name: "Desire", description: "Powerful emotion of attraction" },
-  ];
+  // Refresh control
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    fetchPhotos(1);
+  }, [fetchPhotos]);
 
-  const lookingForOptions = [
-    { id: "0", name: "Casual", description: "Let's keep it easy" },
-    { id: "1", name: "Long Term", description: "One life stand" },
-    { id: "2", name: "Virtual", description: "Virtual fun" },
-    { id: "3", name: "Open", description: "Let's vibe" },
-  ];
-
-  const genderOptions = ['male', 'female', 'non-binary', 'prefer-not-to-say'];
-
-  // Check if subscription is active
-  const isSubscriptionActive = isSubscribed && 
-    (!subscriptionExpiresAt || new Date(subscriptionExpiresAt) > new Date());
-
-  // Determine visible photos based on subscription status
-  const getVisiblePhotos = () => {
-    if (!user?.profileImages) return [];
-    if (isSubscriptionActive) return user.profileImages;
-    return user.profileImages.slice(0, MAX_FREE_PHOTOS);
-  };
-
-  // Handle photo viewing
-  const handleViewPhoto = async (index) => {
-    if (isSubscriptionActive) return;
-
-    if (index >= freePhotosViewed) {
-      try {
-        if (canViewMorePhotos && typeof canViewMorePhotos === 'function' && !canViewMorePhotos()) {
-          Alert.alert(
-            "Limit Reached",
-            `You've viewed ${freePhotosLimit} photos today. Subscribe to view more.`,
-            [
-              { text: "Later" },
-              { text: "Subscribe", onPress: () => router.push("/subscribe") }
-            ]
-          );
-          return;
-        }
-
-        if (incrementPhotoView && typeof incrementPhotoView === 'function') {
-          await incrementPhotoView();
-        }
-      } catch (error) {
-        console.error("Error handling photo view:", error);
-        Alert.alert("Error", "Failed to track photo view");
-      }
+  // Load more photos
+  const loadMorePhotos = () => {
+    if (!loading && hasMore) {
+      fetchPhotos(page + 1);
     }
   };
 
-  // Update user description
-  const updateUserDescription = async () => {
-    if (!description.trim()) {
-      Alert.alert("Error", "Description cannot be empty");
-      return;
-    }
-
+  // Handle photo like with optimistic updates
+  const handleLike = async (photoId, currentIsLiked) => {
     try {
-      setUpdatingDescription(true);
-      if (updateUser && typeof updateUser === 'function') {
-        await updateUser({ description });
-        Alert.alert("Success", "Description updated successfully");
-      } else {
-        throw new Error("Update function not available");
-      }
+      // Optimistic UI update
+      setPhotos(prev => prev.map(photo => 
+        photo._id === photoId 
+          ? { 
+              ...photo, 
+              likes: currentIsLiked ? photo.likes - 1 : photo.likes + 1, 
+              isLiked: !currentIsLiked 
+            } 
+          : photo
+      ));
+
+      // Actual API call
+      const result = await likePhoto(photoId, !currentIsLiked);
+      
+      // Sync with server response
+      setPhotos(prev => prev.map(photo => 
+        photo._id === photoId 
+          ? { 
+              ...photo, 
+              likes: result.data.likes, 
+              isLiked: result.data.isLiked 
+            } 
+          : photo
+      ));
     } catch (error) {
-      console.error("Update error:", error);
-      Alert.alert("Error", error.message || "Failed to update description");
-    } finally {
-      setUpdatingDescription(false);
+      // Revert on error
+      setPhotos(prev => prev.map(photo => 
+        photo._id === photoId 
+          ? { 
+              ...photo, 
+              likes: currentIsLiked ? photo.likes + 1 : photo.likes - 1, 
+              isLiked: currentIsLiked 
+            } 
+          : photo
+      ));
+      Alert.alert("Error", "Failed to update like. Please try again.");
     }
   };
 
-  // Update gender
-  const handleGenderUpdate = async () => {
-    try {
-      setUpdatingGender(true);
-      if (updateUser && typeof updateUser === 'function') {
-        await updateUser({ gender: selectedGender });
-        setShowGenderModal(false);
-        Alert.alert("Success", "Gender updated successfully");
-      } else {
-        throw new Error("Update function not available");
-      }
-    } catch (error) {
-      console.error("Update error:", error);
-      Alert.alert("Error", error.message || "Failed to update gender");
-    } finally {
-      setUpdatingGender(false);
-    }
-  };
-
-  // Handle photo upload
-  const handlePhotoUpload = async () => {
-    if (!isSubscriptionActive && user?.profileImages?.length >= MAX_FREE_PHOTOS) {
+  // Handle chat initiation
+  const handleChat = async (userId) => {
+    if (!isSubscribed) {
       Alert.alert(
-        "Upload Limit Reached",
-        `Free users can upload up to ${MAX_FREE_PHOTOS} photos. Subscribe to upload more.`,
+        "Subscribe to Chat",
+        "You need to subscribe to start chatting with other users",
         [
           { text: "Later" },
           { text: "Subscribe", onPress: () => router.push("/subscribe") }
@@ -166,546 +129,319 @@ const BioScreen = () => {
       );
       return;
     }
-
+    
     try {
-      setUploadingPhoto(true);
-      
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert("Permission required", "We need access to your photos to upload images");
-        return;
-      }
-
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [4, 3],
-        quality: 0.8,
-      });
-
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        const imageUri = result.assets[0].uri;
-        
-        const formData = new FormData();
-        formData.append('photo', {
-          uri: imageUri,
-          type: 'image/jpeg',
-          name: 'profile-photo.jpg'
-        });
-
-        const response = await apiClient.post('/api/photos/upload', formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-          transformRequest: (data) => data,
-        });
-
-        if (updateUser && typeof updateUser === 'function') {
-          await updateUser({ 
-            profileImages: [...(user?.profileImages || []), response.data.imageUrl] 
-          });
-        }
-        
-        Alert.alert("Success", "Photo uploaded successfully");
+      const result = await startChat(userId);
+      if (result.success) {
+        router.push(`/chat/${result.chatId}`);
       }
     } catch (error) {
-      console.error("Upload error:", error);
-      let errorMessage = "Failed to upload photo";
-      
-      if (error.response) {
-        errorMessage = error.response.data?.message || 
-                      `Server responded with ${error.response.status}`;
-      } else if (error.request) {
-        errorMessage = "No response from server. Please check your connection.";
-      } else {
-        errorMessage = error.message || "Network request failed";
-      }
-      
-      Alert.alert("Upload Failed", errorMessage);
-    } finally {
-      setUploadingPhoto(false);
+      console.error("Error starting chat:", error);
     }
   };
 
-  // Render carousel item with view limits
-  const renderImageCarousel = ({ item, index }) => {
-    const imageUrl = typeof item === 'string' ? item : item.url;
+  // Render photo card with like functionality
+  const renderPhotoCard = ({ item }) => {
+    const isOnline = onlineUsers.includes(item.userId);
+    const isCurrentUser = user?._id === item.userId;
+
     return (
-      <TouchableOpacity 
-        onPress={() => handleViewPhoto(index)}
-        activeOpacity={0.8}
-      >
-        <View style={styles.carouselItem}>
-          <Image
-            style={styles.carouselImage}
-            source={{ uri: imageUrl }}
-          />
-          {!isSubscriptionActive && index >= MAX_FREE_PHOTOS && (
-            <View style={styles.lockedOverlay}>
-              <Text style={styles.lockedText}>Subscribe to view</Text>
+      <View style={styles.photoCard} key={item._id}>
+        {/* User info header */}
+        <View style={styles.userHeader}>
+          <View style={styles.userInfo}>
+            <View style={{ position: 'relative' }}>
+              <Image
+                style={styles.userAvatar}
+                source={{ uri: item.user?.profileImages?.[0]?.url || "https://via.placeholder.com/100" }}
+              />
+              {isOnline && !isCurrentUser && <View style={styles.onlineIndicator} />}
             </View>
-          )}
-          {!isSubscriptionActive && index < MAX_FREE_PHOTOS && index >= freePhotosViewed && (
-            <View style={styles.viewCountOverlay}>
-              <Text style={styles.viewCountText}>
-                {freePhotosViewed}/{freePhotosLimit} views used
-              </Text>
+            <View>
+              <Text style={styles.userName}>{item.user?.name || "User"}</Text>
+              <Text style={styles.userAge}>{item.user?.age || ''} years</Text>
             </View>
+          </View>
+          
+          {!isCurrentUser && (
+            <TouchableOpacity onPress={() => handleChat(item.userId)}>
+              <MaterialIcons name="chat" size={24} color="#FF1493" />
+            </TouchableOpacity>
           )}
         </View>
-      </TouchableOpacity>
-    );
-  };
-
-  // Format gender display text
-  const formatGenderText = (gender) => {
-    return gender.split('-').map(word => 
-      word.charAt(0).toUpperCase() + word.slice(1)
-    ).join('-');
-  };
-
-  return (
-    <ScrollView style={styles.container}>
-      {/* Profile Header */}
-      <View style={styles.profileHeader}>
+        
+        {/* Photo */}
         <Image
-          style={styles.headerImage}
-          source={{ uri: "https://example.com/header-background.jpg" }}
+          style={styles.photoImage}
+          source={{ uri: item.url }}
         />
-        <View style={styles.profileBadge}>
-          <Image
-            style={styles.profileImage}
-            source={{ 
-              uri: user?.profileImages?.[0]?.url || 
-                   user?.profileImages?.[0] || 
-                   "https://via.placeholder.com/100" 
-            }}
-          />
-          <Text style={styles.profileName}>{user?.name || "User"}</Text>
-          <Text style={styles.profileAge}>{user?.age || ''} years</Text>
-          <TouchableOpacity onPress={() => setShowGenderModal(true)}>
-            <Text style={styles.genderText}>
-              {user?.gender ? formatGenderText(user.gender) : 'Set gender'}
+        
+        {/* Photo actions */}
+        <View style={styles.photoActions}>
+          <TouchableOpacity 
+            style={styles.likeButton}
+            onPress={() => handleLike(item._id, item.isLiked)}
+          >
+            <AntDesign 
+              name={item.isLiked ? "heart" : "hearto"} 
+              size={24} 
+              color={item.isLiked ? "#FF1493" : "#444"} 
+            />
+            <Text style={[styles.likeCount, item.isLiked && styles.likedCount]}>
+              {item.likes || 0}
             </Text>
           </TouchableOpacity>
         </View>
       </View>
+    );
+  };
 
-      {/* Options Tabs */}
-      <View style={styles.tabsContainer}>
-        <Pressable onPress={() => setOption("AD")}>
-          <Text style={[styles.tabText, option === "AD" && styles.activeTab]}>
-            AD
-          </Text>
-        </Pressable>
-        <Pressable onPress={() => setOption("Photos")}>
-          <Text style={[styles.tabText, option === "Photos" && styles.activeTab]}>
-            Photos
-          </Text>
-        </Pressable>
-        <Pressable onPress={() => setOption("Turn-ons")}>
-          <Text style={[styles.tabText, option === "Turn-ons" && styles.activeTab]}>
-            Turn-ons
-          </Text>
-        </Pressable>
-        <Pressable onPress={() => setOption("Looking For")}>
-          <Text style={[styles.tabText, option === "Looking For" && styles.activeTab]}>
-            Looking For
-          </Text>
-        </Pressable>
+  return (
+    <View style={styles.container}>
+      {/* Header */}
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Discover</Text>
+        <TouchableOpacity onPress={() => router.push("/(tabs)/profile")}>
+          <Image
+            style={styles.profileImage}
+            source={{ 
+              uri: user?.profileImages?.[0]?.url || "https://via.placeholder.com/100" 
+            }}
+          />
+        </TouchableOpacity>
       </View>
 
-      {/* AD Section */}
-      {option === "AD" && (
-        <View style={styles.sectionContainer}>
-          <View style={styles.descriptionInputContainer}>
-            <TextInput
-              value={description}
-              onChangeText={setDescription}
-              style={styles.descriptionInput}
-              placeholder="Tell others about yourself..."
-              placeholderTextColor="#888"
-              multiline
-              numberOfLines={4}
+      {/* Photo Feed */}
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#FF1493" />
+        </View>
+      ) : photos.length > 0 ? (
+        <FlatList
+          data={photos}
+          renderItem={renderPhotoCard}
+          keyExtractor={item => item._id}
+          contentContainerStyle={styles.photoFeed}
+          onEndReached={loadMorePhotos}
+          onEndReachedThreshold={0.5}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          refreshControl={
+            <RefreshControl 
+              refreshing={refreshing} 
+              onRefresh={onRefresh}
+              tintColor="#FF1493"
             />
-            <Pressable
-              onPress={updateUserDescription}
-              style={styles.publishButton}
-              disabled={updatingDescription}
-            >
-              {updatingDescription ? (
-                <ActivityIndicator color="white" />
-              ) : (
-                <>
-                  <Text style={styles.publishButtonText}>Update Profile</Text>
-                  <Entypo name="edit" size={20} color="white" />
-                </>
-              )}
-            </Pressable>
-          </View>
+          }
+          ListFooterComponent={
+            hasMore ? (
+              <Pressable 
+                style={styles.loadMoreButton} 
+                onPress={loadMorePhotos}
+                disabled={loading}
+              >
+                <Text style={styles.loadMoreText}>Load More Photos</Text>
+              </Pressable>
+            ) : null
+          }
+        />
+      ) : (
+        <View style={styles.emptyState}>
+          <Image
+            style={styles.emptyImage}
+            source={{ uri: "https://cdn-icons-png.flaticon.com/128/776/776528.png" }}
+          />
+          <Text style={styles.emptyTitle}>No Photos Available</Text>
+          <Text style={styles.emptyText}>
+            {user?.gender === "male" 
+              ? "There are currently no female users with photos" 
+              : "There are currently no male users with photos"}
+          </Text>
         </View>
       )}
 
-      {/* Photos Section */}
-      {option === "Photos" && (
-        <View style={styles.sectionContainer}>
-          {user?.profileImages?.length > 0 ? (
-            <>
-              <Carousel
-                data={getVisiblePhotos()}
-                renderItem={renderImageCarousel}
-                sliderWidth={350}
-                itemWidth={300}
-                onSnapToItem={setActiveSlide}
-              />
-              
-              {!isSubscriptionActive && (
-                <Text style={styles.photoCounter}>
-                  {Math.min(freePhotosViewed, freePhotosLimit)}/{freePhotosLimit} photos viewed today
-                </Text>
-              )}
-              
-              {!isSubscriptionActive && user?.profileImages?.length > MAX_FREE_PHOTOS && (
-                <Text style={styles.subscribePrompt}>
-                  Subscribe to view all {user.profileImages.length} photos
-                </Text>
-              )}
-            </>
-          ) : (
-            <Text style={styles.noPhotosText}>No photos available</Text>
-          )}
-
-          {/* Photo Upload Section */}
-          <View style={styles.uploadContainer}>
-            <Text style={styles.uploadTitle}>Add new photos</Text>
-            
-            {!isSubscriptionActive && (
-              <Text style={styles.remainingPhotosText}>
-                {MAX_FREE_PHOTOS - (user?.profileImages?.length || 0)} of {MAX_FREE_PHOTOS} free uploads remaining
-              </Text>
-            )}
-            
-            <Pressable
-              onPress={handlePhotoUpload}
-              style={[
-                styles.uploadButton,
-                (!isSubscriptionActive && (user?.profileImages?.length || 0) >= MAX_FREE_PHOTOS) && 
-                  styles.disabledButton
-              ]}
-              disabled={(!isSubscriptionActive && (user?.profileImages?.length || 0) >= MAX_FREE_PHOTOS) || uploadingPhoto}
-            >
-              {uploadingPhoto ? (
-                <ActivityIndicator color="white" />
-              ) : (
-                <>
-                  <Entypo name="camera" size={20} color="white" style={styles.uploadIcon} />
-                  <Text style={styles.uploadButtonText}>
-                    {isSubscriptionActive ? "Upload Photo" : "Upload (Free)"}
-                  </Text>
-                </>
-              )}
-            </Pressable>
-          </View>
-        </View>
-      )}
-
-      {/* Gender Update Modal */}
-      <Modal
-        visible={showGenderModal}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setShowGenderModal(false)}
+      {/* Upload Button */}
+      <TouchableOpacity
+        style={styles.uploadButton}
+        onPress={() => router.push("/upload-photo")}
       >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Select Your Gender</Text>
-            
-            {genderOptions.map(gender => (
-              <TouchableOpacity
-                key={gender}
-                style={[
-                  styles.genderOption,
-                  selectedGender === gender && styles.selectedGenderOption
-                ]}
-                onPress={() => setSelectedGender(gender)}
-              >
-                <Text style={[
-                  styles.genderOptionText,
-                  selectedGender === gender && styles.selectedGenderOptionText
-                ]}>
-                  {formatGenderText(gender)}
-                </Text>
-              </TouchableOpacity>
-            ))}
-
-            <View style={styles.modalButtons}>
-              <TouchableOpacity 
-                style={styles.cancelButton}
-                onPress={() => setShowGenderModal(false)}
-              >
-                <Text style={[styles.buttonText, { color: '#000' }]}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={styles.saveButton}
-                onPress={handleGenderUpdate}
-                disabled={updatingGender}
-              >
-                {updatingGender ? (
-                  <ActivityIndicator color="white" />
-                ) : (
-                  <Text style={styles.buttonText}>Save</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-    </ScrollView>
+        <Entypo name="camera" size={24} color="white" />
+      </TouchableOpacity>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: '#f8f9fa',
   },
-  profileHeader: {
-    position: 'relative',
-    marginBottom: 60
-  },
-  headerImage: {
-    width: '100%',
-    height: 180,
-    resizeMode: 'cover'
-  },
-  profileBadge: {
-    position: 'absolute',
-    bottom: -50,
-    left: '50%',
-    transform: [{ translateX: -50 }],
-    width: 100,
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#fff',
-    padding: 10,
-    borderRadius: 10,
+    padding: 15,
+    backgroundColor: 'white',
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  headerTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#FF1493',
+  },
+  profileImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#FF69B4',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 50,
+  },
+  photoFeed: {
+    padding: 15,
+  },
+  photoCard: {
+    backgroundColor: 'white',
+    borderRadius: 15,
+    marginBottom: 20,
+    overflow: 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
-    elevation: 2
+    elevation: 3,
   },
-  profileImage: {
+  userHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 15,
+    backgroundColor: '#FFF5F7',
+  },
+  userInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  userAvatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: '#FFD1DC',
+  },
+  onlineIndicator: {
+    position: 'absolute',
+    bottom: 5,
+    right: 5,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#4CAF50',
+    borderWidth: 2,
+    borderColor: 'white',
+  },
+  userName: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  userAge: {
+    fontSize: 14,
+    color: '#777',
+  },
+  photoImage: {
+    width: '100%',
+    aspectRatio: 0.75,
+    backgroundColor: '#f0f0f0',
+  },
+  photoActions: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    padding: 15,
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+  },
+  likeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    backgroundColor: '#FFF0F5',
+    borderRadius: 20,
+  },
+  likeCount: {
+    marginLeft: 8,
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#444',
+  },
+  likedCount: {
+    color: '#FF1493',
+  },
+  loadMoreButton: {
+    backgroundColor: '#FF1493',
+    padding: 15,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginTop: 10,
+    marginBottom: 20,
+  },
+  loadMoreText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  emptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 40,
+  },
+  emptyImage: {
+    width: 120,
+    height: 120,
+    marginBottom: 20,
+    opacity: 0.7,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 10,
+    color: '#444',
+  },
+  emptyText: {
+    fontSize: 16,
+    color: '#777',
+    textAlign: 'center',
+    lineHeight: 24,
+  },
+  uploadButton: {
+    position: 'absolute',
+    bottom: 30,
+    right: 30,
     width: 60,
     height: 60,
     borderRadius: 30,
-    borderWidth: 2,
-    borderColor: '#fd5c63'
-  },
-  profileName: {
-    marginTop: 5,
-    fontWeight: '600'
-  },
-  profileAge: {
-    color: '#666',
-    fontSize: 12
-  },
-  genderText: {
-    color: '#007AFF',
-    fontSize: 12,
-    marginTop: 2
-  },
-  tabsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee'
-  },
-  tabText: {
-    fontSize: 16,
-    color: '#666'
-  },
-  activeTab: {
-    color: '#fd5c63',
-    fontWeight: '600',
-    borderBottomWidth: 2,
-    borderBottomColor: '#fd5c63'
-  },
-  sectionContainer: {
-    padding: 15
-  },
-  descriptionInputContainer: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 10,
-    minHeight: 150,
-    padding: 10
-  },
-  descriptionInput: {
-    flex: 1,
-    textAlignVertical: 'top'
-  },
-  publishButton: {
-    backgroundColor: '#fd5c63',
-    padding: 10,
-    borderRadius: 5,
-    flexDirection: 'row',
+    backgroundColor: '#FF1493',
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 10
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 8,
   },
-  publishButtonText: {
-    color: '#fff',
-    fontWeight: '600',
-    marginRight: 5
-  },
-  carouselItem: {
-    width: '100%',
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  carouselImage: {
-    width: '85%',
-    height: 300,
-    borderRadius: 10,
-    transform: [{ rotate: '-5deg' }]
-  },
-  lockedOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    width: '85%',
-    height: 300,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-    transform: [{ rotate: '-5deg' }]
-  },
-  lockedText: {
-    color: '#fff',
-    fontWeight: 'bold',
-    fontSize: 16
-  },
-  viewCountOverlay: {
-    position: 'absolute',
-    bottom: 10,
-    left: 0,
-    right: 0,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    padding: 5,
-    borderRadius: 5,
-    alignItems: 'center'
-  },
-  viewCountText: {
-    color: '#fff',
-    fontSize: 12
-  },
-  photoCounter: {
-    textAlign: 'center',
-    marginTop: 10,
-    color: '#666'
-  },
-  subscribePrompt: {
-    textAlign: 'center',
-    color: '#fd5c63',
-    marginTop: 10,
-    fontWeight: '500'
-  },
-  noPhotosText: {
-    textAlign: 'center',
-    marginVertical: 20,
-    color: '#888'
-  },
-  uploadContainer: {
-    marginTop: 20,
-    borderTopWidth: 1,
-    borderTopColor: '#eee',
-    paddingTop: 20
-  },
-  uploadTitle: {
-    fontWeight: '600',
-    marginBottom: 5
-  },
-  remainingPhotosText: {
-    color: '#666',
-    fontSize: 12,
-    marginBottom: 15
-  },
-  uploadButton: {
-    backgroundColor: '#fd5c63',
-    padding: 15,
-    borderRadius: 5,
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'center'
-  },
-  disabledButton: {
-    opacity: 0.5
-  },
-  uploadButtonText: {
-    color: '#fff',
-    fontWeight: '600'
-  },
-  uploadIcon: {
-    marginRight: 10
-  },
-  modalContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)'
-  },
-  modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 10,
-    padding: 20,
-    width: '80%'
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 20,
-    textAlign: 'center'
-  },
-  genderOption: {
-    padding: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee'
-  },
-  selectedGenderOption: {
-    backgroundColor: '#f5f5f5'
-  },
-  genderOptionText: {
-    fontSize: 16
-  },
-  selectedGenderOptionText: {
-    color: '#fd5c63',
-    fontWeight: '600'
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 20
-  },
-  cancelButton: {
-    padding: 10,
-    borderRadius: 5,
-    borderWidth: 1,
-    borderColor: '#ccc',
-    flex: 1,
-    marginRight: 10,
-    alignItems: 'center'
-  },
-  saveButton: {
-    backgroundColor: '#fd5c63',
-    padding: 10,
-    borderRadius: 5,
-    flex: 1,
-    alignItems: 'center'
-  },
-  buttonText: {
-    color: 'white',
-    fontWeight: '600'
-  }
 });
 
 export default BioScreen;
