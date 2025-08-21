@@ -206,8 +206,8 @@ router.post(
   initiateChat
 );
 
-// ==================== DEBUG ENDPOINT ====================
-// Add a debug endpoint to list all registered routes
+// ==================== DEBUG ENDPOINTS ====================
+// Add a debug endpoint to list all auth routes
 router.get('/debug/routes', (req, res) => {
   const routes = [];
   router.stack.forEach((layer) => {
@@ -226,20 +226,33 @@ router.get('/debug/routes', (req, res) => {
   });
 });
 
+// Add a simple debug endpoint to test if auth routes are working
+router.get('/debug/test', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Auth routes are working',
+    timestamp: new Date().toISOString()
+  });
+});
+
 // ==================== ROUTE DEBUG LOG ====================
+// Enhanced route logging with more details
 console.log('\n🔍 Auth Router Registered Routes:');
+let routeCount = 0;
 router.stack.forEach((layer, i) => {
   if (layer.route) {
+    routeCount++;
     const methods = Object.keys(layer.route.methods)
       .map(m => m.toUpperCase())
       .join(', ');
-    console.log(`Route ${i + 1}: ${methods.padEnd(8)} ${layer.route.path}`);
+    console.log(`Route ${routeCount}: ${methods.padEnd(8)} ${layer.route.path}`);
   }
 });
+console.log(`✅ Total auth routes registered: ${routeCount}`);
 
 // ==================== REQUEST LOGGER ====================
 router.use((req, res, next) => {
-  console.log(`[AuthRouter] ${req.method} ${req.originalUrl}`);
+  console.log(`[AuthRouter] ${new Date().toISOString()} - ${req.method} ${req.originalUrl}`);
   next();
 });
 

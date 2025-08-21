@@ -177,7 +177,7 @@ routeLoadOrder.forEach(route => {
     app.use(route.prefix, exported);
     console.log(`✅ Mounted ${route.prefix}`);
 
-    if (debugRoutes) { // Changed from !isProduction && debugRoutes to just debugRoutes
+    if (debugRoutes) {
       console.log(`🔍 ${route.name} Endpoints:`);
       logRouteEndpoints(exported, route.prefix);
     }
@@ -187,7 +187,7 @@ routeLoadOrder.forEach(route => {
   }
 });
 
-if (debugRoutes) { // Changed from !isProduction && debugRoutes to just debugRoutes
+if (debugRoutes) {
   console.log('\n🔍 Final Route Stack:');
   app._router.stack.forEach(layer => {
     if (layer.name === 'router' && layer.handle) {
@@ -203,8 +203,8 @@ if (debugRoutes) { // Changed from !isProduction && debugRoutes to just debugRou
 }
 console.log('✅ All routes registered');
 
-// ==================== DEBUG ENDPOINT FOR ROUTES ====================
-// Add a debug endpoint to list all registered routes
+// ==================== DEBUG ENDPOINTS ====================
+// Debug endpoint to list all registered routes
 app.get('/api/debug/routes', (req, res) => {
   const routes = [];
   
@@ -232,6 +232,18 @@ app.get('/api/debug/routes', (req, res) => {
     success: true,
     message: 'Registered routes',
     routes: routes
+  });
+});
+
+// Debug endpoint to check environment
+app.get('/api/debug/env', (req, res) => {
+  res.json({
+    success: true,
+    environment: process.env.NODE_ENV || 'development',
+    debugRoutes: process.env.DEBUG_ROUTES || 'false',
+    port: process.env.PORT,
+    host: process.env.HOST,
+    apiBaseUrl: API_BASE_URL
   });
 });
 
@@ -287,6 +299,28 @@ connectDB();
 
 // ==================== HEALTH CHECK ====================
 app.get('/api/health', (req, res) => {
+  // Get all registered routes
+  const routes = [];
+  app._router.stack.forEach(layer => {
+    if (layer.name === 'router' && layer.handle) {
+      const prefix = layer.regexp.toString()
+        .replace(/^\/\^/, '')
+        .replace(/\\\//g, '/')
+        .replace(/\$\//, '')
+        .replace(/\/i/, '');
+      
+      layer.handle.stack.forEach(routeLayer => {
+        if (routeLayer.route) {
+          const methods = Object.keys(routeLayer.route.methods).join(', ').toUpperCase();
+          routes.push({
+            path: prefix + routeLayer.route.path,
+            methods: methods
+          });
+        }
+      });
+    }
+  });
+
   res.json({
     status: 'UP',
     uptime: process.uptime(),
@@ -294,30 +328,39 @@ app.get('/api/health', (req, res) => {
     db: mongoose.connection.readyState === 1 ? 'CONNECTED' : 'DISCONNECTED',
     worker: process.pid,
     environment: process.env.NODE_ENV || 'development',
-    endpoints: [
-      '/api/auth/select-gender',
-      '/api/auth/register',
-      '/api/auth/login',
-      '/api/auth/me',
-      '/api/payments/mpesa',
-      '/api/photos/upload',
-      '/api/photos/feed',
-      '/api/likes/:photoId',
-      '/api/chats/initiate',
-      '/api/chats/:chatId/messages'
-    ]
+    registeredRoutes: routes
   });
 });
 
 // ==================== ERROR HANDLING ====================
 app.use((req, res) => {
+  // Get all registered routes for the suggestion
+  const routes = [];
+  app._router.stack.forEach(layer => {
+    if (layer.name === 'router' && layer.handle) {
+      const prefix = layer.regexp.toString()
+        .replace(/^\/\^/, '')
+        .replace(/\\\//g, '/')
+        .replace(/\$\//, '')
+        .replace(/\/i/, '');
+      
+      layer.handle.stack.forEach(routeLayer => {
+        if (routeLayer.route) {
+          routes.push(prefix + routeLayer.route.path);
+        }
+      });
+    }
+  });
+
   res.status(404).json({
     success: false,
     code: 'ROUTE_NOT_FOUND',
     message: `Route ${req.method} ${req.originalUrl} not found`,
-    suggestion: 'Check /api/health for available services'
+    suggestion: 'Check /api/health for available services',
+    availableRoutes: routes
   });
 });
+
 app.use((err, req, res, next) => {
   console.error('⚠️ Server error:', err);
   res.status(err.status || 500).json({
