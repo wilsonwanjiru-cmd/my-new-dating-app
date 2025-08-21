@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 const os = require('os');
+const path = require('path');
+const fs = require('fs');
 
 // ==================== Utility Functions ====================
 const formatBytes = (bytes) => {
@@ -10,6 +12,61 @@ const formatBytes = (bytes) => {
   const i = Math.floor(Math.log(bytes) / Math.log(1024));
   return parseFloat((bytes / Math.pow(1024, i)).toFixed(2)) + ' ' + sizes[i];
 };
+
+// ==================== DEBUG ENDPOINT FOR ROUTES ====================
+// Add a debug endpoint to list all registered routes
+router.get('/debug/routes', (req, res) => {
+  const routes = [];
+  
+  // Get the main app from the request
+  const app = req.app;
+  
+  app._router.stack.forEach(layer => {
+    if (layer.name === 'router' && layer.handle) {
+      const prefix = layer.regexp.toString()
+        .replace(/^\/\^/, '')
+        .replace(/\\\//g, '/')
+        .replace(/\$\//, '')
+        .replace(/\/i/, '');
+      
+      layer.handle.stack.forEach(routeLayer => {
+        if (routeLayer.route) {
+          const methods = Object.keys(routeLayer.route.methods).join(', ').toUpperCase();
+          routes.push({
+            path: prefix + routeLayer.route.path,
+            methods: methods
+          });
+        }
+      });
+    }
+  });
+  
+  res.json({
+    success: true,
+    message: 'Registered routes',
+    routes: routes
+  });
+});
+
+// ==================== DEBUG ENDPOINT FOR ENVIRONMENT ====================
+router.get('/debug/env', (req, res) => {
+  // Filter out sensitive environment variables
+  const envVars = {};
+  Object.keys(process.env).forEach(key => {
+    if (!key.toLowerCase().includes('secret') && 
+        !key.toLowerCase().includes('key') && 
+        !key.toLowerCase().includes('password') &&
+        !key.toLowerCase().includes('token')) {
+      envVars[key] = process.env[key];
+    }
+  });
+  
+  res.json({
+    success: true,
+    environment: process.env.NODE_ENV || 'development',
+    envVars: envVars
+  });
+});
 
 // ==================== /api/health ====================
 /**
@@ -63,7 +120,20 @@ router.get('/', async (req, res) => {
       process: {
         pid: process.pid,
         node: process.version
-      }
+      },
+      // Add information about available endpoints
+      endpoints: [
+        '/api/auth/select-gender',
+        '/api/auth/register',
+        '/api/auth/login',
+        '/api/auth/me',
+        '/api/payments/mpesa',
+        '/api/photos/upload',
+        '/api/photos/feed',
+        '/api/likes/:photoId',
+        '/api/chats/initiate',
+        '/api/chats/:chatId/messages'
+      ]
     };
 
     res.status(200).json(healthData);
